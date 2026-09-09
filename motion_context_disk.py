@@ -276,7 +276,7 @@ CACHE_TYPE = "H3_MOTION_DISK_CACHE"
 _LOG = logging.getLogger("minimax_h3_tail_from_latent.motion_context_disk")
 
 _NODE_DIR = Path(__file__).resolve().parent
-_CACHE_ROOT = _NODE_DIR / "cache"
+_DEFAULT_CACHE_ROOT = _NODE_DIR / "cache"
 _DATA_MAGIC = b"H3MCACHE12\x00"
 _DATA_START = len(_DATA_MAGIC)
 _AUDIO_CACHE_MAGIC = b"H3MAUDIO1\x00"
@@ -310,8 +310,10 @@ def _safe_name(value):
 
 
 def _ensure_cache_root():
-    _CACHE_ROOT.mkdir(parents=True, exist_ok=True)
-    return _CACHE_ROOT
+    override = os.environ.get("H3_CACHE_ROOT")
+    root = Path(override).expanduser().resolve() if override else _DEFAULT_CACHE_ROOT
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def _chain_paths(owner_id):
@@ -4483,6 +4485,7 @@ class MiniMaxH3MotionContextDiskFinalDecode:
             return {
                 "ui": {
                     "h3_video": [item],
+                    "h3_outputs": [_comfy_media_item(autosave_path, fps, "output")],
                     "h3_preview_info": [{
                         "mode": "clip_by_clip",
                         "clip": int(len(segments)),
@@ -4594,6 +4597,7 @@ class MiniMaxH3MotionContextDiskFinalDecode:
         return {
             "ui": {
                 "h3_video": [item],
+                "h3_outputs": [_comfy_media_item(output_path, fps, "output")],
                 "h3_preview_info": [{
                     "mode": "full_batch_incremental",
                     "clip": int(len(segments)),

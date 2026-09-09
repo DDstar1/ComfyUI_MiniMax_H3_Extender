@@ -4,6 +4,12 @@ A ComfyUI custom node for **MiniMax H3** designed to generate long, continuous v
 
 The node combines **Ref2VA conditioning, Motion Context, disk caching, multi-clip generation, image references, audio references, and final video/audio decoding** into a much simpler workflow.
 
+## RunPod Serverless
+
+This fork includes a production container based on RunPod's official ComfyUI worker. It loads models from an attached Network Volume, persists the Extender cache through `H3_CACHE_ROOT`, and publishes a `linux/amd64` image to GitHub Container Registry through GitHub Actions.
+
+See [RUNPOD_SERVERLESS.md](RUNPOD_SERVERLESS.md) for the volume layout, image name, endpoint setup, and API request format.
+
 ---
 
 ### 🆕 Per-Clip Local References

@@ -1,0 +1,11 @@
+.git
+.github
+.idea
+.vscode
+__pycache__
+*.py[cod]
+*.log
+cache
+.env
+.env.*
+node_modules
