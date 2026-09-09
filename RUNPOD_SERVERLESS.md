@@ -2,6 +2,18 @@
 
 This repository builds a RunPod ComfyUI Serverless worker with the MiniMax H3 Extender installed. It keeps RunPod's official ComfyUI handler and accepts normal ComfyUI API-format workflows.
 
+## Current deployment state
+
+GitHub Actions successfully built and published commit `e1c4c07` on 2026-09-09:
+
+```text
+ghcr.io/ddstar1/comfyui_minimax_h3_extender:runpod-latest
+```
+
+No RunPod Pod, template or endpoint has been created. Building the image used GitHub
+Actions, not RunPod compute. The existing Network Volume was inspected but not
+modified.
+
 ## Network Volume layout
 
 Attach the existing Network Volume to the endpoint. Serverless mounts it at `/runpod-volume`, and the base worker discovers models in these directories:
@@ -44,7 +56,7 @@ docker push ghcr.io/ddstar1/comfyui_minimax_h3_extender:runpod-latest
 
 ## Create the endpoint
 
-1. Wait for the GitHub Actions image build to finish.
+1. Confirm the latest **Build RunPod Serverless image** workflow completed successfully.
 2. In RunPod, create a Serverless template using `ghcr.io/ddstar1/comfyui_minimax_h3_extender:runpod-latest`.
 3. Create an endpoint from that template in `EU-RO-1`, because the existing Network Volume `my_100gb_volume` (`0oaqjjkos5`) is in that data center.
 4. Attach that Network Volume under the endpoint's advanced settings.

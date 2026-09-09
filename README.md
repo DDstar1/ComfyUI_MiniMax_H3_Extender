@@ -6,7 +6,11 @@ The node combines **Ref2VA conditioning, Motion Context, disk caching, multi-cli
 
 ## RunPod Serverless
 
-This fork includes a production container based on RunPod's official ComfyUI worker. It loads models from an attached Network Volume, persists the Extender cache through `H3_CACHE_ROOT`, and publishes a `linux/amd64` image to GitHub Container Registry through GitHub Actions.
+This fork includes a production container based on RunPod's official ComfyUI worker. It loads models from an attached Network Volume, persists the Extender cache through `H3_CACHE_ROOT`, and publishes a `linux/amd64` image to GitHub Container Registry through GitHub Actions. The first image build for commit `e1c4c07` completed successfully on 2026-09-09.
+
+The worker keeps RunPod's normal `input.workflow` and `input.images` request format. A thin handler extension collects final MP4/MKV artifacts and returns them in `output.videos`, since the stock handler only collects image outputs.
+
+No RunPod Pod, template or endpoint was created while preparing this fork. The image build used GitHub Actions and incurred no RunPod compute charge.
 
 See [RUNPOD_SERVERLESS.md](RUNPOD_SERVERLESS.md) for the volume layout, image name, endpoint setup, and API request format.
 
