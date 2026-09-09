@@ -35,7 +35,22 @@ models/vae/minimax_h3_audio_vae_fp32.safetensors
 models/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16(1).safetensors
 ```
 
-The image sets `H3_CACHE_ROOT=/runpod-volume/comfytr-cache`, which stores the Extender's disk-backed motion context on the volume. Override this environment variable in the RunPod template if a different directory is required.
+The image uses `/runpod-volume/comfytr-cache` as its cache base. Every request must
+include a stable `cache_namespace`. The handler hashes it and atomically tells the
+already-running ComfyUI process to use:
+
+```text
+/runpod-volume/comfytr-cache/<hash-prefix>/<sha256-of-cache-namespace>/
+```
+
+Derive the namespace in the trusted Next.js backend from the authenticated user ID
+and project ID, for example `user.id + ":" + project.id`. Never accept an arbitrary
+user ID from the browser. The same project must send the same namespace on every
+continuation request. Different projects resolve to different cache directories.
+
+`H3_CACHE_ROOT` changes the base directory and `H3_CACHE_ROOT_FILE` changes the
+ephemeral control-file location. The handler serializes jobs inside each worker so
+concurrent requests cannot switch one another's cache root.
 
 ## Build and publish
 
@@ -69,6 +84,7 @@ Export the workflow with ComfyUI's **Save (API Format)** option. Send that objec
 ```json
 {
   "input": {
+    "cache_namespace": "authenticated-user-id:project-id",
     "workflow": {
       "1": {
         "class_type": "LoadImage",

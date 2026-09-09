@@ -310,7 +310,14 @@ def _safe_name(value):
 
 
 def _ensure_cache_root():
-    override = os.environ.get("H3_CACHE_ROOT")
+    override = None
+    control_file = os.environ.get("H3_CACHE_ROOT_FILE")
+    if control_file:
+        try:
+            override = Path(control_file).expanduser().read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+    override = override or os.environ.get("H3_CACHE_ROOT")
     root = Path(override).expanduser().resolve() if override else _DEFAULT_CACHE_ROOT
     root.mkdir(parents=True, exist_ok=True)
     return root

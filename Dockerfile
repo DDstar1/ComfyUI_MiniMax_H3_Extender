@@ -20,3 +20,4 @@ RUN uv pip install --no-cache -r /comfyui/custom_nodes/ComfyUI_MiniMax_H3_Extend
 # Cache generated motion context on the attached Network Volume so a warm or
 # replacement worker can reuse validated clip state.
 ENV H3_CACHE_ROOT=/runpod-volume/comfytr-cache
+ENV H3_CACHE_ROOT_FILE=/tmp/comfytr-h3-cache-root
