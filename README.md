@@ -19,8 +19,10 @@ and selects a separate persistent cache directory before ComfyUI executes the jo
 Jobs are serialized within each worker to prevent cache-root switching during a run.
 
 Queue endpoint `my_extender_endpoint` (`nqpfrj6twlaz5h`) now uses the image and
-mounts Network Volume `0oaqjjkos5` in `EU-RO-1`. Its initial rollout was still
-pulling the container when last audited; no endpoint render had been submitted.
+mounts Network Volume `0oaqjjkos5` in `EU-RO-1`. A three-second smoke request
+was accepted as queued, but later status lookup returned 404; endpoint health
+reported one failed job and no completed jobs. The exact failure is not yet
+established, and playable output remains unverified.
 The endpoint now uses a 30-minute job timeout and a 300-second idle timeout, which
 allows the measured 17m 6s 0.4 MP render and warm reuse between adjacent clips.
 
@@ -463,3 +465,13 @@ New workflows should use the main **MiniMax H3 Extender** node, which now handle
 Thanks again to everyone testing the node and reporting edge cases.
 
 The Extender is becoming much more comfortable to use for long H3 sequences.
+
+## ClipWeave integration test — 2026-09-11
+
+The Next.js app has a real Red Signal project with seven account image references
+and a four-by-five-second plan (20 seconds maximum). Project/reference persistence
+passed; prompt revision exposed a schema failure and the app now requests strict
+structured output. Testing is moving to local Next.js for direct server logs;
+ComfyUI and GPU rendering still execute on remote RunPod. No worker code was
+changed during this frontend test. Playable output, artifact ingestion, validated
+prefix locking and sequential cache reuse have not yet passed end to end.
