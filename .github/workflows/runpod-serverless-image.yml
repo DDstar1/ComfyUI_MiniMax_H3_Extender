@@ -9,6 +9,7 @@ on:
       - ".github/workflows/runpod-serverless-image.yml"
       - ".dockerignore"
       - "Dockerfile"
+      - "extra_model_paths.runpod-volume.yaml"
       - "requirements.txt"
       - "**/*.py"
       - "web/**"

@@ -10,6 +10,19 @@ COPY . /comfyui/custom_nodes/ComfyUI_MiniMax_H3_Extender
 RUN mv /handler.py /runpod_base_handler.py
 COPY runpod_handler.py /handler.py
 
+# ComfyUI auto-loads extra_model_paths.yaml from its base directory. Append
+# rather than replace: the base worker may already configure paths there, and
+# overwriting the file would drop the stock /runpod-volume/models layout. The
+# leading newline protects against an existing file with no trailing newline.
+# This runs before the startup check below so a malformed file fails the build
+# instead of reaching a worker.
+COPY extra_model_paths.runpod-volume.yaml /tmp/extra_model_paths.runpod-volume.yaml
+RUN printf '\n' >> /comfyui/extra_model_paths.yaml \
+    && cat /tmp/extra_model_paths.runpod-volume.yaml >> /comfyui/extra_model_paths.yaml \
+    && rm /tmp/extra_model_paths.runpod-volume.yaml \
+    && echo "--- resulting /comfyui/extra_model_paths.yaml ---" \
+    && cat /comfyui/extra_model_paths.yaml
+
 # The upstream worker launches ComfyUI from /opt/venv. Install the node's
 # dependencies into that same environment, then fail the build if node imports
 # break ComfyUI startup.

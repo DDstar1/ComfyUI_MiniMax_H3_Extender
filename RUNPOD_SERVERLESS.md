@@ -54,24 +54,44 @@ exception, so a playable endpoint artifact is not yet verified.
 
 ## Network Volume layout
 
-Attach the existing Network Volume to the endpoint. Serverless mounts it at `/runpod-volume`, and the base worker discovers models in these directories:
+Attach the existing Network Volume to the endpoint. Serverless mounts it at
+`/runpod-volume`; a Pod mounts the same volume at `/workspace`. The base worker
+discovers models under `/runpod-volume/models/`, but **the weights are not
+there**. The Pod setup installs ComfyUI onto the volume itself, so they live at:
 
 ```text
-/runpod-volume/models/unet/
-/runpod-volume/models/clip/
-/runpod-volume/models/vae/
-/runpod-volume/models/loras/
+<volume>/runpod-slim/ComfyUI/models/
 ```
 
-For the current Ref2VA workflow, keep these filenames or update the workflow selectors to match the files on the volume:
+Volume `0oaqjjkos5` was listed over the S3 API on 2026-09-11. Its root contains
+only `comfytr-cache/` (written by this worker) and `runpod-slim/`; there is no
+`models/` directory at the root. That is why every render failed validation with
+empty model lists (`unet_name: '…' not in []`) while the container itself was
+healthy.
+
+Copying the weights to `/runpod-volume/models/` is not an option: the volume is
+100 GB with 69.26 GB already used, and the five H3 models alone are ~52 GB. The
+image therefore appends
+[`extra_model_paths.runpod-volume.yaml`](extra_model_paths.runpod-volume.yaml)
+to `/comfyui/extra_model_paths.yaml`, which ComfyUI auto-loads from its base
+directory with no CLI flag. The entries are additive, so a volume laid out as
+`/runpod-volume/models/` keeps working.
+
+Verified files on the volume for the current Ref2VA workflow:
 
 ```text
-models/unet/minimax_h3_ref2va_pruned_int8_convrot.safetensors
-models/clip/qwen3vl_32b_minimax_h3_int4_convrot.safetensors
-models/vae/minimax_h3_video_vae_fp16.safetensors
-models/vae/minimax_h3_audio_vae_fp32.safetensors
-models/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16(1).safetensors
+runpod-slim/ComfyUI/models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors   19.53 GB
+runpod-slim/ComfyUI/models/text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors        25.28 GB
+runpod-slim/ComfyUI/models/vae/minimax_h3_video_vae_fp16.safetensors                             4.85 GB
+runpod-slim/ComfyUI/models/vae/minimax_h3_audio_vae_fp32.safetensors                             0.56 GB
+runpod-slim/ComfyUI/models/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors      1.82 GB
 ```
+
+Earlier revisions of this document listed the text encoder as `int4` and the
+LoRA with a `(1)` suffix. Neither filename exists on the volume; the frontend's
+`render-workflow.ts` constants were corrected to match the list above. ComfyUI
+treats `unet`/`diffusion_models` and `clip`/`text_encoders` as aliases for the
+same folder lists, so those directory-name differences are harmless.
 
 The image uses `/runpod-volume/comfytr-cache` as its cache base. Every request must
 include a stable `cache_namespace`. The handler hashes it and atomically tells the

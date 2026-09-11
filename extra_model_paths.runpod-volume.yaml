@@ -1,0 +1,26 @@
+# Appended to /comfyui/extra_model_paths.yaml at image build time.
+#
+# The Pod setup installs ComfyUI onto the Network Volume itself, so the weights
+# live at <volume>/runpod-slim/ComfyUI/models. A Pod mounts the volume at
+# /workspace and finds them; Serverless mounts the same volume at
+# /runpod-volume and looks in /runpod-volume/models, which does not exist.
+# Pointing ComfyUI at the real location keeps both deployments on one copy of
+# the weights, which matters because the 100 GB volume cannot hold a second.
+#
+# These entries are additive: any path the base worker already configures keeps
+# working, so a volume laid out as /runpod-volume/models still resolves.
+runpod_volume_comfyui:
+  base_path: /runpod-volume/runpod-slim/ComfyUI
+  diffusion_models: |
+    models/diffusion_models/
+    models/unet/
+  text_encoders: |
+    models/text_encoders/
+    models/clip/
+  vae: models/vae/
+  loras: models/loras/
+  checkpoints: models/checkpoints/
+  clip_vision: models/clip_vision/
+  controlnet: models/controlnet/
+  embeddings: models/embeddings/
+  upscale_models: models/upscale_models/
