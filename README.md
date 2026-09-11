@@ -475,3 +475,12 @@ structured output. Testing is moving to local Next.js for direct server logs;
 ComfyUI and GPU rendering still execute on remote RunPod. No worker code was
 changed during this frontend test. Playable output, artifact ingestion, validated
 prefix locking and sequential cache reuse have not yet passed end to end.
+
+## Reproducing the end-to-end test
+
+See the [Claude Code end-to-end runbook](https://github.com/DDstar1/Comfy__Video_Creator/blob/main/docs/e2e/README.md) for exact setup,
+fixture, reference paths, browser steps, acceptance checks and debugging entry points.
+Latest checkpoint: local Google sign-in and project loading passed. The connected
+local prompt-revision retry still returned invalid model output after the schema
+change; parser diagnostics are the next step. No render for this project has yet
+been submitted. Preserve the existing four-by-five-second project (20 seconds).
