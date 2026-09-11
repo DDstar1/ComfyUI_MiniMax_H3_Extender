@@ -6,8 +6,8 @@ The node combines **Ref2VA conditioning, Motion Context, disk caching, multi-cli
 
 ## RunPod Serverless
 
-**Ongoing change:** the next image build adds request-scoped project cache isolation
-using `input.cache_namespace` and an atomic handler-to-ComfyUI control file.
+The published image includes request-scoped project cache isolation using
+`input.cache_namespace` and an atomic handler-to-ComfyUI control file.
 
 This fork includes a production container based on RunPod's official ComfyUI worker. It loads models from an attached Network Volume, persists the Extender cache through `H3_CACHE_ROOT`, and publishes a `linux/amd64` image to GitHub Container Registry through GitHub Actions. The first image build for commit `e1c4c07` completed successfully on 2026-09-09.
 
@@ -18,7 +18,11 @@ backend from the authenticated user and project IDs. The handler hashes that val
 and selects a separate persistent cache directory before ComfyUI executes the job.
 Jobs are serialized within each worker to prevent cache-root switching during a run.
 
-No RunPod Pod, template or endpoint was created while preparing this fork. The image build used GitHub Actions and incurred no RunPod compute charge.
+Queue endpoint `my_extender_endpoint` (`nqpfrj6twlaz5h`) now uses the image and
+mounts Network Volume `0oaqjjkos5` in `EU-RO-1`. Its initial rollout was still
+pulling the container when last audited; no endpoint render had been submitted.
+The endpoint now uses a 30-minute job timeout and a 300-second idle timeout, which
+allows the measured 17m 6s 0.4 MP render and warm reuse between adjacent clips.
 
 See [RUNPOD_SERVERLESS.md](RUNPOD_SERVERLESS.md) for the volume layout, image name, endpoint setup, and API request format.
 

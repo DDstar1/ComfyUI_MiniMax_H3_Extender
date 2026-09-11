@@ -10,9 +10,47 @@ GitHub Actions successfully built and published commit `e1c4c07` on 2026-09-09:
 ghcr.io/ddstar1/comfyui_minimax_h3_extender:runpod-latest
 ```
 
-No RunPod Pod, template or endpoint has been created. Building the image used GitHub
-Actions, not RunPod compute. The existing Network Volume was inspected but not
-modified.
+Queue endpoint `my_extender_endpoint` now exists:
+
+```text
+Endpoint ID: nqpfrj6twlaz5h
+Image: ghcr.io/ddstar1/comfyui_minimax_h3_extender:runpod-latest
+Region: EU-RO-1
+Network Volume: 0oaqjjkos5
+Run URL: https://api.runpod.ai/v2/nqpfrj6twlaz5h/run
+Status URL: https://api.runpod.ai/v2/nqpfrj6twlaz5h/status/{job_id}
+```
+
+Live configuration read and updated on 2026-09-11:
+
+| Setting | Value |
+| --- | --- |
+| Endpoint type | Queue |
+| Worker range | minimum 0, maximum 3 |
+| Idle timeout | 300 seconds |
+| Job timeout | 1800000 ms (30 minutes) |
+| Scaling | Queue delay, target 4 seconds |
+| GPU count | 1 |
+| GPU pools | `AMPERE_16`, `AMPERE_24` |
+| Minimum CUDA | 12.0 |
+| Container disk | 5 GB |
+| FlashBoot | Off |
+
+The first rollout attempted RTX A4500, RTX 4000 Ada and L4 workers. At audit time
+the image was still downloading/extracting, with one initializing and four throttled
+worker records, zero ready workers and zero submitted/completed/failed jobs. This is
+deployment evidence, not a successful generation test.
+
+The job timeout and idle timeout have been raised to the recommended values. Keep
+minimum workers at zero unless continuous warm capacity is worth continuous GPU
+billing.
+
+A three-second 0.2 MP smoke workflow was submitted on 2026-09-11 as job
+`43a60308-2802-4b04-8f02-04292fc0df97-u1`. RunPod accepted it, but the job failed
+before generation and its status record subsequently returned `404`. Endpoint
+health reported one failed job, zero queued or running jobs, and ready workers.
+The available worker log stream contained startup readiness messages but no job
+exception, so a playable endpoint artifact is not yet verified.
 
 ## Network Volume layout
 
@@ -69,13 +107,55 @@ docker build --platform linux/amd64 -t ghcr.io/ddstar1/comfyui_minimax_h3_extend
 docker push ghcr.io/ddstar1/comfyui_minimax_h3_extender:runpod-latest
 ```
 
-## Create the endpoint
+## Endpoint creation and worker lifecycle
 
-1. Confirm the latest **Build RunPod Serverless image** workflow completed successfully.
-2. In RunPod, create a Serverless template using `ghcr.io/ddstar1/comfyui_minimax_h3_extender:runpod-latest`.
-3. Create an endpoint from that template in `EU-RO-1`, because the existing Network Volume `my_100gb_volume` (`0oaqjjkos5`) is in that data center.
-4. Attach that Network Volume under the endpoint's advanced settings.
-5. Choose a GPU with enough VRAM for the selected MiniMax H3 model and set the endpoint's worker limits.
+The endpoint was created from the Docker image, in `EU-RO-1`, with the existing
+Network Volume attached. Next.js does not start a worker directly. It submits a job
+to `/run`; RunPod queues the request, obtains an allowed GPU, pulls this image, mounts
+the volume and starts the inherited worker entrypoint. The image starts ComfyUI and
+`/handler.py`. At the bottom of `runpod_handler.py`, this call registers the queue
+handler:
+
+```python
+runpod.serverless.start({"handler": handler})
+```
+
+For each job, the wrapper selects the project cache, calls the official ComfyUI
+handler, and groups MP4/MKV artifacts under `output.videos`. RunPod stops an idle
+worker after the configured idle timeout. With minimum workers zero, GPU compute can
+scale to zero; the next request then pays the cold-start delay.
+
+The Dockerfile performs these image-time steps:
+
+1. Inherit `runpod/worker-comfyui:5.10.0-base`.
+2. Copy this repository into ComfyUI's `custom_nodes` directory.
+3. Preserve RunPod's official `/handler.py` as `/runpod_base_handler.py`.
+4. Install this repository's wrapper as `/handler.py`.
+5. Install node dependencies and run a CPU ComfyUI import check.
+
+GitHub Actions rebuilds and republishes `runpod-latest` when relevant code is pushed.
+An existing endpoint using a mutable tag still needs a new endpoint release/worker
+rollout before all workers run the newly published image.
+
+## Measured Pod benchmark and resolution
+
+Manual tests used an RTX 2000 Ada 16 GB Pod billed at $0.26/hour:
+
+| Resolution selector | Six-second render | Approx. clip cost | 30 sequential clips |
+| --- | ---: | ---: | ---: |
+| 0.2 MP | 528.23s and 547.89s; 8m 58s average | $0.039 | 4h 29m / $1.17 |
+| 0.4 MP | 1026.30s; 17m 6s | $0.074 | 8h 33m / $2.22 |
+
+The 0.4 MP run almost exactly doubled runtime. During the lower-resolution run,
+reported VRAM was 100%, system memory 78% and GPU utilization around 20%, which
+indicates that higher resolutions may increase offloading or exhaust a 16 GB card.
+
+The workflow's Resolution Selector width and height outputs are connected to the
+MiniMax H3 Extender. All dimensions are aligned to its 32-pixel canvas grid. Changing
+resolution invalidates the existing motion-context geometry, so do not change it
+mid-sequence: reset the sequence cache and regenerate from Clip 1 at the new setting.
+Use lower resolution for drafts and benchmark visual quality before choosing 0.4 MP
+for final output.
 
 ## Request format
 
@@ -102,6 +182,19 @@ Export the workflow with ComfyUI's **Save (API Format)** option. Send that objec
 ```
 
 Submit the payload to the endpoint's `/runsync` route for a synchronous call or `/run` for an asynchronous job. Production workflows should be sent exactly as exported; the abbreviated object above only shows the image contract.
+
+For these multi-minute renders, use `/run`, store the returned job ID, and poll the
+status URL. Configure the Next.js server with:
+
+```dotenv
+RUNPOD_ENDPOINT_API_KEY=YOUR_RUNPOD_API_KEY
+RUNPOD_ENDPOINT_ID=nqpfrj6twlaz5h
+```
+
+Never prefix the API key with `NEXT_PUBLIC_`. Derive `cache_namespace` on the server
+from the authenticated Supabase user and owned project. Enforce one active job per
+project across all backend instances; the handler lock only serializes jobs inside a
+single worker, while the endpoint can run three workers for different projects.
 
 Completed MP4/MKV artifacts are returned in `output.videos`. Each entry contains `filename`, `type`, and `data`, using the same base64 or S3 URL contract as `output.images`:
 
