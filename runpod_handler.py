@@ -4,6 +4,7 @@ import base64
 import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -53,26 +54,52 @@ def _namespace_digest(namespace):
     return hashlib.sha256(namespace.encode("utf-8")).hexdigest()
 
 
-def _volume_chain_video(namespace):
+def _volume_chain_video(namespace, workspace=None):
     """Locate a chain's assembled video in its cache directory on the volume.
 
     Returns None when the chain is not on this volume, which happens whenever a
     cache has been truncated by an edit or evicted. The caller then falls back
-    to the copy the application stored, so the merge never depends on a cache
-    surviving.
+    to the copy the application stored, so recovery and merge never depend on a
+    cache surviving.
+
+    Confirmed by listing the volume directly: this application's workflow never
+    populates chain_*.preview.mp4 -- that file belongs to a different, unused
+    live-preview feature of the vendored node. What is always present is
+    chain_*.final.video/ref2va_NNNN.<ext>, one file per clip position in the
+    chain. A single-clip chain therefore has exactly one file, which is already
+    the render's own output. A chain with more than one clip needs those
+    segments joined; `workspace` is required in that case, since a temporary
+    file has to exist somewhere to hold the result.
     """
     digest = _namespace_digest(namespace)
     directory = _CACHE_BASE_ROOT / digest[:2] / digest
-    if not directory.is_dir():
+    final_dir = directory / "chain_extender_1.final.video"
+    if not final_dir.is_dir():
         return None
-    previews = [
-        path
-        for path in directory.glob("chain_*.preview.mp4")
-        if path.is_file() and path.stat().st_size > 0
-    ]
-    if not previews:
+
+    def _index(path):
+        match = re.match(r"ref2va_(\d+)\.", path.name)
+        return int(match.group(1)) if match else -1
+
+    segments = sorted(
+        (
+            path
+            for path in final_dir.glob("ref2va_*.*")
+            if path.is_file() and path.stat().st_size > 0
+        ),
+        key=_index,
+    )
+    if not segments:
         return None
-    return max(previews, key=lambda path: path.stat().st_mtime)
+    if len(segments) == 1:
+        return segments[0]
+    if workspace is None:
+        raise ValueError(
+            f"Chain has {len(segments)} clip segments and needs a workspace to join them"
+        )
+    joined = Path(workspace) / f"{digest[:16]}-joined.mp4"
+    _concat(_find_ffmpeg(), segments, joined)
+    return joined
 
 
 def _download(url, destination):
@@ -161,7 +188,7 @@ def _merge_chains(request):
             if not isinstance(chain, dict):
                 return {"error": f"Merge chain {position} is not an object"}
             try:
-                local = _volume_chain_video(chain.get("cache_namespace"))
+                local = _volume_chain_video(chain.get("cache_namespace"), workspace=root)
             except ValueError as error:
                 return {"error": str(error)}
             if local is not None:
@@ -226,22 +253,27 @@ def _fetch_chain(request):
     there as part of normal operation, independent of any job's own retention.
     This does not create new persistence; it exposes what already exists.
 
-    The returned file matches a render's normal output.videos exactly, since
-    every render in this application uses neutral color_adjustment values --
-    if that ever changes, a color-corrected clip and its neutral volume preview
-    would differ, and this fallback would return the wrong pixels.
+    A chain with more than one clip position is joined with the same stream-copy
+    concat merge uses, since the cache holds one file per clip position, not one
+    cumulative file. The returned file matches a render's normal output.videos
+    exactly, since every render in this application uses neutral
+    color_adjustment values -- if that ever changes, a color-corrected clip and
+    its neutral volume cache would differ, and this fallback would return the
+    wrong pixels.
     """
     namespace = request.get("cache_namespace")
-    try:
-        local = _volume_chain_video(namespace)
-    except ValueError as error:
-        return {"error": str(error)}
-    if local is None:
-        return {"error": "No cached video for this cache_namespace on this volume"}
-    payload = base64.b64encode(local.read_bytes()).decode("ascii")
+    with tempfile.TemporaryDirectory(prefix="comfytr-fetch-") as workspace:
+        try:
+            local = _volume_chain_video(namespace, workspace=Path(workspace))
+        except ValueError as error:
+            return {"error": str(error)}
+        if local is None:
+            return {"error": "No cached video for this cache_namespace on this volume"}
+        payload = base64.b64encode(local.read_bytes()).decode("ascii")
+        filename = local.name
     return {
         "images": [],
-        "videos": [{"filename": local.name, "type": "base64", "data": payload}],
+        "videos": [{"filename": filename, "type": "base64", "data": payload}],
     }
 
 
