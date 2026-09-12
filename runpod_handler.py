@@ -1,9 +1,14 @@
 """RunPod's official ComfyUI handler with isolated H3 caches and video output."""
 
+import base64
 import hashlib
 import os
 from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 import threading
+import urllib.request
 
 import runpod
 import runpod_base_handler as base
@@ -39,6 +44,156 @@ def _history_with_video_outputs(prompt_id):
 base.get_history = _history_with_video_outputs
 
 
+def _namespace_digest(namespace):
+    if not isinstance(namespace, str) or not namespace.strip():
+        raise ValueError("Each merge chain needs a 'cache_namespace'")
+    namespace = namespace.strip()
+    if len(namespace) > 512:
+        raise ValueError("'cache_namespace' must be 512 characters or fewer")
+    return hashlib.sha256(namespace.encode("utf-8")).hexdigest()
+
+
+def _volume_chain_video(namespace):
+    """Locate a chain's assembled video in its cache directory on the volume.
+
+    Returns None when the chain is not on this volume, which happens whenever a
+    cache has been truncated by an edit or evicted. The caller then falls back
+    to the copy the application stored, so the merge never depends on a cache
+    surviving.
+    """
+    digest = _namespace_digest(namespace)
+    directory = _CACHE_BASE_ROOT / digest[:2] / digest
+    if not directory.is_dir():
+        return None
+    previews = [
+        path
+        for path in directory.glob("chain_*.preview.mp4")
+        if path.is_file() and path.stat().st_size > 0
+    ]
+    if not previews:
+        return None
+    return max(previews, key=lambda path: path.stat().st_mtime)
+
+
+def _download(url, destination):
+    if not isinstance(url, str) or not url.lower().startswith("https://"):
+        raise ValueError("Merge fallback URLs must be https")
+    with urllib.request.urlopen(url, timeout=600) as response:
+        with open(destination, "wb") as handle:
+            shutil.copyfileobj(response, handle)
+    if destination.stat().st_size <= 0:
+        raise ValueError("Merge fallback download was empty")
+    return destination
+
+
+def _find_ffmpeg():
+    try:
+        import imageio_ffmpeg
+
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and Path(exe).exists():
+            return str(exe)
+    except Exception:
+        pass
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    raise RuntimeError("Merge: no ffmpeg binary is available in this image")
+
+
+def _concat(ffmpeg, sources, destination):
+    """Join finished chains. Stream copy first, re-encode only if that fails.
+
+    Every chain is produced by the same workflow, so a stream copy is normally
+    valid and costs seconds instead of a full re-encode. The fallback covers a
+    chain that was rendered with different encode settings.
+    """
+    listing = destination.with_suffix(".txt")
+    listing.write_text(
+        "".join(f"file '{Path(src).as_posix()}'\n" for src in sources),
+        encoding="utf-8",
+    )
+    common = [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(listing)]
+    copied = subprocess.run(
+        [*common, "-c", "copy", str(destination)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    if copied.returncode == 0 and destination.exists() and destination.stat().st_size > 0:
+        return "stream-copy"
+    encoded = subprocess.run(
+        [
+            *common,
+            "-c:v", "libx264", "-crf", "17", "-preset", "fast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k",
+            str(destination),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    if encoded.returncode != 0:
+        detail = encoded.stderr.decode("utf-8", errors="replace")[-1500:]
+        raise RuntimeError(f"Merge concat failed.\n{detail}")
+    return "re-encode"
+
+
+def _merge_chains(request):
+    """Join each chain's finished video, in order, into one file.
+
+    Chains are read from the Network Volume where they were rendered, so nothing
+    is transferred in the normal case. A chain missing from the volume is pulled
+    from the signed URL the trusted backend supplied for it.
+    """
+    chains = request.get("chains")
+    if not isinstance(chains, list) or not chains:
+        return {"error": "Merge requires a non-empty 'chains' list"}
+
+    filename = str(request.get("filename") or "clipweave-merged.mp4")
+    if "/" in filename or "\\" in filename or not filename.lower().endswith(".mp4"):
+        return {"error": "Merge 'filename' must be a plain .mp4 name"}
+
+    ffmpeg = _find_ffmpeg()
+    sources = []
+    origins = []
+    with tempfile.TemporaryDirectory(prefix="comfytr-merge-") as workspace:
+        root = Path(workspace)
+        for position, chain in enumerate(chains):
+            if not isinstance(chain, dict):
+                return {"error": f"Merge chain {position} is not an object"}
+            try:
+                local = _volume_chain_video(chain.get("cache_namespace"))
+            except ValueError as error:
+                return {"error": str(error)}
+            if local is not None:
+                sources.append(local)
+                origins.append("volume")
+                continue
+            fallback = chain.get("fallback_url")
+            if not fallback:
+                return {
+                    "error": (
+                        f"Merge chain {position} is not on this volume and no "
+                        "'fallback_url' was supplied"
+                    )
+                }
+            try:
+                sources.append(_download(fallback, root / f"chain_{position:03d}.mp4"))
+            except Exception as error:
+                return {"error": f"Merge chain {position} download failed: {error}"}
+            origins.append("fallback")
+
+        destination = root / filename
+        method = _concat(ffmpeg, sources, destination)
+        payload = base64.b64encode(destination.read_bytes()).decode("ascii")
+        size = destination.stat().st_size
+
+    return {
+        "images": [],
+        "videos": [{"filename": filename, "type": "base64", "data": payload}],
+        "merge": {"chains": len(sources), "sources": origins, "method": method, "bytes": size},
+    }
+
+
 def _select_project_cache(job):
     """Atomically select a stable, non-identifying cache directory for this job."""
     job_input = job.get("input") if isinstance(job, dict) else None
@@ -63,6 +218,15 @@ def _select_project_cache(job):
 
 def handler(job):
     """Run the official handler and group video files separately for clients."""
+    job_input = job.get("input") if isinstance(job, dict) else None
+    # A merge joins already-rendered chains and never touches ComfyUI, so it is
+    # handled before the cache root is selected for a generation job.
+    if isinstance(job_input, dict) and isinstance(job_input.get("merge"), dict):
+        try:
+            return _merge_chains(job_input["merge"])
+        except (OSError, RuntimeError, ValueError) as error:
+            return {"error": str(error)}
+
     # ComfyUI and the handler are separate processes. The atomic control file is
     # how the already-running ComfyUI process learns this job's cache directory.
     # Serializing the selection and execution prevents concurrent jobs in one

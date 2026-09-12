@@ -216,6 +216,73 @@ from the authenticated Supabase user and owned project. Enforce one active job p
 project across all backend instances; the handler lock only serializes jobs inside a
 single worker, while the endpoint can run three workers for different projects.
 
+## Merging finished chains
+
+The Extender chains clips into one continuous take and has no cut primitive, so a
+cut is produced by rendering a new chain under a different `cache_namespace`.
+Joining those chains into one film is a separate job type. See the
+[design note](../frontend/docs/design/scene-cuts-and-merge.md) for the model.
+
+Send `input.merge` instead of `input.workflow`. The job never touches ComfyUI:
+
+```json
+{
+  "input": {
+    "merge": {
+      "filename": "clipweave-final.mp4",
+      "chains": [
+        {
+          "cache_namespace": "authenticated-user-id:project-id:0",
+          "fallback_url": "https://…signed-supabase-url…"
+        },
+        {
+          "cache_namespace": "authenticated-user-id:project-id:1",
+          "fallback_url": "https://…signed-supabase-url…"
+        }
+      ]
+    }
+  }
+}
+```
+
+Chains are joined in array order. For each one the worker hashes the namespace
+exactly as a render does and looks for the chain's assembled video in its cache
+directory on the Network Volume, so nothing is transferred in the normal case.
+A chain missing from the volume — the cache is truncated whenever a clip is
+edited, and nothing guarantees retention — is downloaded from `fallback_url`
+instead, which must be https. Supplying a fallback for every chain is
+recommended; a chain absent from both is an error.
+
+Concatenation is attempted as a stream copy first, which is lossless and takes
+seconds because every chain comes from the same workflow. It falls back to an
+H.264 re-encode if a chain was rendered with different encode settings.
+
+The result uses the normal video contract, plus a `merge` summary reporting
+where each chain came from:
+
+```json
+{
+  "output": {
+    "images": [],
+    "videos": [{ "filename": "clipweave-final.mp4", "type": "base64", "data": "AAAA…" }],
+    "merge": { "chains": 2, "sources": ["volume", "fallback"], "method": "stream-copy", "bytes": 5242880 }
+  }
+}
+```
+
+Two caveats. The volume copy is the Extender's assembled **preview**, which is
+deliberately neutral — per-clip colour corrections are baked only into the
+persistent output the application stores. Where colour correction matters, pass
+the Supabase copy and expect the fallback path. And the merged film is returned
+base64 inline like any other video, so a long film will eventually outgrow the
+response; storing it from the worker instead is unsolved.
+
+`input.merge` is implemented in `runpod_handler.py`. The application side — the
+chain model, the merge button, and gating it on every clip being validated — is
+not built yet.
+
+## Render output contract
+
 Completed MP4/MKV artifacts are returned in `output.videos`. Each entry contains `filename`, `type`, and `data`, using the same base64 or S3 URL contract as `output.images`:
 
 ```json
