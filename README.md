@@ -9,22 +9,24 @@ The node combines **Ref2VA conditioning, Motion Context, disk caching, multi-cli
 The published image includes request-scoped project cache isolation using
 `input.cache_namespace` and an atomic handler-to-ComfyUI control file.
 
-This fork includes a production container based on RunPod's official ComfyUI worker. It loads models from an attached Network Volume, persists the Extender cache through `H3_CACHE_ROOT`, and publishes a `linux/amd64` image to GitHub Container Registry through GitHub Actions. The first image build for commit `e1c4c07` completed successfully on 2026-09-09.
+This fork includes a production container based on RunPod's official ComfyUI worker. It loads models via an `extra_model_paths` entry pointing at where the Pod setup actually installed them on the volume (`<volume>/runpod-slim/ComfyUI/models`, not the base worker's default `/runpod-volume/models`), persists the Extender cache through `H3_CACHE_ROOT`, and publishes a `linux/amd64` image to GitHub Container Registry through GitHub Actions.
 
-The worker keeps RunPod's normal `input.workflow` and `input.images` request format. A thin handler extension collects final MP4/MKV artifacts and returns them in `output.videos`, since the stock handler only collects image outputs.
+The worker keeps RunPod's normal `input.workflow` and `input.images` request format. A thin handler extension collects final MP4/MKV artifacts and returns them in `output.videos`, since the stock handler only collects image outputs. Two further job types skip ComfyUI entirely and read already-rendered video straight off the volume: `input.merge` joins multiple chains into one film, and `input.fetch` recovers a single chain whose own RunPod job result has expired.
 
 Every job must also include a stable `input.cache_namespace`, derived by the trusted
-backend from the authenticated user and project IDs. The handler hashes that value
-and selects a separate persistent cache directory before ComfyUI executes the job.
-Jobs are serialized within each worker to prevent cache-root switching during a run.
+backend from the authenticated user, project and clip **chain** — a cut to a new scene
+gets its own namespace, so it renders with no motion context from the scene before it.
+The handler hashes that value and selects a separate persistent cache directory before
+ComfyUI executes the job. Jobs are serialized within each worker to prevent cache-root
+switching during a run.
 
-Queue endpoint `my_extender_endpoint` (`nqpfrj6twlaz5h`) now uses the image and
-mounts Network Volume `0oaqjjkos5` in `EU-RO-1`. A three-second smoke request
-was accepted as queued, but later status lookup returned 404; endpoint health
-reported one failed job and no completed jobs. The exact failure is not yet
-established, and playable output remains unverified.
-The endpoint now uses a 30-minute job timeout and a 300-second idle timeout, which
-allows the measured 17m 6s 0.4 MP render and warm reuse between adjacent clips.
+Queue endpoint `my_extender_endpoint` (`nqpfrj6twlaz5h`) mounts Network Volume
+`0oaqjjkos5` in `EU-RO-1` and is pinned to a specific image digest rather than
+the mutable `runpod-latest` tag, after tracking the tag once left the fleet
+mixed mid-rollout. **Three clips across two chains have rendered, stored and
+played back** through the application. The 30-minute job timeout and
+300-second idle timeout allow the measured 17m 6s 0.4 MP render and warm reuse
+between adjacent clips in the same chain.
 
 See [RUNPOD_SERVERLESS.md](RUNPOD_SERVERLESS.md) for the volume layout, image name, endpoint setup, and API request format.
 

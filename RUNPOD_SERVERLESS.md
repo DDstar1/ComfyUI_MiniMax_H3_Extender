@@ -4,24 +4,29 @@ This repository builds a RunPod ComfyUI Serverless worker with the MiniMax H3 Ex
 
 ## Current deployment state
 
-GitHub Actions successfully built and published commit `e1c4c07` on 2026-09-09:
+**Rendering works.** Three clips have completed on this endpoint across two
+chains, stored and played back from the application's own bucket. Getting there
+took several rounds of fixes, documented in the root README's checkpoint —
+a missing worker node, a stale server-side allowlist, a missing required
+input, and the model-path issue below.
+
+Queue endpoint `my_extender_endpoint` (`nqpfrj6twlaz5h`, `EU-RO-1`, Network
+Volume `0oaqjjkos5`) is pinned to an **image digest**, not the mutable
+`runpod-latest` tag:
 
 ```text
-ghcr.io/ddstar1/comfyui_minimax_h3_extender:runpod-latest
+ghcr.io/ddstar1/comfyui_minimax_h3_extender@sha256:cef2c2ff5f124d7154cebd258bb50836996f37731e69ba6fe7ebd96b02b38106
 ```
 
-Queue endpoint `my_extender_endpoint` now exists:
-
-```text
-Endpoint ID: nqpfrj6twlaz5h
-Image: ghcr.io/ddstar1/comfyui_minimax_h3_extender:runpod-latest
-Region: EU-RO-1
-Network Volume: 0oaqjjkos5
-Run URL: https://api.runpod.ai/v2/nqpfrj6twlaz5h/run
-Status URL: https://api.runpod.ai/v2/nqpfrj6twlaz5h/status/{job_id}
-```
-
-Live configuration read and updated on 2026-09-11:
+That digest is current as of the merge/fetch fix below; it moves every time the
+template is repinned, so check `runpodctl template get uoq6ryaqu6` for the
+live value rather than trusting this file. The pin exists because tracking the
+mutable tag once left the fleet mixed mid-rollout — old-image workers reported
+empty model lists, new-image workers succeeded, and the same job's outcome
+depended on which worker picked it up. Rolling out now needs an explicit
+`runpodctl template update uoq6ryaqu6 --image <ref>`, and it's worth waiting
+for `runpodctl serverless health` to show `ready: 0` afterward so old workers
+have actually cycled out before testing.
 
 | Setting | Value |
 | --- | --- |
@@ -36,21 +41,8 @@ Live configuration read and updated on 2026-09-11:
 | Container disk | 5 GB |
 | FlashBoot | Off |
 
-The first rollout attempted RTX A4500, RTX 4000 Ada and L4 workers. At audit time
-the image was still downloading/extracting, with one initializing and four throttled
-worker records, zero ready workers and zero submitted/completed/failed jobs. This is
-deployment evidence, not a successful generation test.
-
-The job timeout and idle timeout have been raised to the recommended values. Keep
-minimum workers at zero unless continuous warm capacity is worth continuous GPU
-billing.
-
-A three-second 0.2 MP smoke workflow was submitted on 2026-09-11 as job
-`43a60308-2802-4b04-8f02-04292fc0df97-u1`. RunPod accepted it, but the job failed
-before generation and its status record subsequently returned `404`. Endpoint
-health reported one failed job, zero queued or running jobs, and ready workers.
-The available worker log stream contained startup readiness messages but no job
-exception, so a playable endpoint artifact is not yet verified.
+Keep minimum workers at zero unless continuous warm capacity is worth
+continuous GPU billing.
 
 ## Network Volume layout
 
@@ -220,8 +212,19 @@ single worker, while the endpoint can run three workers for different projects.
 
 The Extender chains clips into one continuous take and has no cut primitive, so a
 cut is produced by rendering a new chain under a different `cache_namespace`.
-Joining those chains into one film is a separate job type. See the
-[design note](../frontend/docs/design/scene-cuts-and-merge.md) for the model.
+Joining those chains into one film is a separate job type. The chain model
+(`continuesPrevious`, per-chain namespaces, chain-scoped validation) is built in
+the application; see the [design note](../frontend/docs/design/scene-cuts-and-merge.md).
+
+Where a chain's video actually lives on the volume was wrong in an earlier
+version of this document. Confirmed by listing the volume directly: this
+workflow never writes the vendored node's `chain_*.preview.mp4` file — that
+belongs to a different, unused live-preview feature. What is always present is
+`chain_*.final.video/ref2va_NNNN.<ext>`, one file per clip position in the
+chain, the same per-segment cache the node uses for Full Batch export. A
+single-clip chain has exactly one such file, already equal to that render's own
+output; a chain with more than one clip has one file per position, joined in
+order by the same stream-copy concat merge uses.
 
 Send `input.merge` instead of `input.workflow`. The job never touches ComfyUI:
 
@@ -270,16 +273,58 @@ where each chain came from:
 }
 ```
 
-Two caveats. The volume copy is the Extender's assembled **preview**, which is
-deliberately neutral — per-clip colour corrections are baked only into the
-persistent output the application stores. Where colour correction matters, pass
-the Supabase copy and expect the fallback path. And the merged film is returned
-base64 inline like any other video, so a long film will eventually outgrow the
+Two caveats remain. This depends on every render using neutral
+`color_adjustment`, which is true today; if per-clip colour correction is ever
+wired up, a corrected clip's live output and its cached segment could diverge,
+since it is unverified whether the cache reflects colour settings applied after
+the clip was originally generated. And the merged film is returned base64
+inline like any other video, so a long film will eventually outgrow the
 response; storing it from the worker instead is unsolved.
 
-`input.merge` is implemented in `runpod_handler.py`. The application side — the
-chain model, the merge button, and gating it on every clip being validated — is
-not built yet.
+`input.merge` is implemented in `runpod_handler.py` and the chain model exists
+in the application. **Never executed against a real multi-clip chain** — every
+chain rendered so far has had exactly one clip, so the join path is
+syntax-checked and logically fixed but unproven live. The merge button and
+gating it on every clip being validated are not built.
+
+### Recovering a render whose own status has expired
+
+A generation job's own `/status` result is only queryable for roughly 30
+minutes after completion — verified live: a job that had genuinely finished
+(`executionTime` set, a video in its output) later 404'd. The video survives
+that window regardless, on the volume, for the same reason merge can read it.
+
+Send `input.fetch` instead of `input.workflow`. Like merge, this never touches
+ComfyUI:
+
+```json
+{ "input": { "fetch": { "cache_namespace": "authenticated-user-id:project-id:0" } } }
+```
+
+It looks up the chain's segments the same way merge does, joining them if there
+is more than one, and returns the result in the normal `output.videos` shape —
+nothing downstream has to know the video came from here instead of a fresh
+render. If no segment exists at that namespace, it fails fast with `{"error":
+"No cached video for this cache_namespace on this volume"}` rather than
+retrying, since there is nothing more to recover.
+
+**The application only calls this for a multi-clip chain.** For the common
+case — a single-clip chain — its own server reads the volume directly over the
+S3-compatible API, with no RunPod job and no GPU charge, since a single
+existing file needs no joining. See
+[`frontend/src/lib/server/runpod-volume.ts`](../frontend/src/lib/server/runpod-volume.ts).
+That direct read does not support presigned URLs — verified live: a
+correctly-signed query-string GET with no `Authorization` header returns 401
+`missing Authorization header` — so every read, from the worker or from the
+application server, must carry a full SigV4 header signature; a bare link can
+never be handed to a browser.
+
+Verified live for a single-clip chain, after the `.final.video` fix landed and
+the endpoint was re-pinned: `input.fetch` completed and returned
+`ref2va_0000.mp4`, 1,266,081 bytes, matching the volume listing. Not yet
+exercised for a multi-clip chain. The direct server-side S3 read
+(`runpod-volume.ts`) was verified separately, against the same file, with a
+standalone script mirroring its exact logic.
 
 ## Render output contract
 
