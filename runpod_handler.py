@@ -216,15 +216,50 @@ def _select_project_cache(job):
     return cache_root
 
 
+def _fetch_chain(request):
+    """Recover an already-finished chain video that a job's own /status expired.
+
+    A generation job's result (including its base64 video) is only queryable
+    through Runpod's /status for a limited window after completion -- roughly
+    30 minutes, observed live. The video itself survives on the Network Volume
+    indefinitely, because the Extender's disk cache writes an assembled preview
+    there as part of normal operation, independent of any job's own retention.
+    This does not create new persistence; it exposes what already exists.
+
+    The returned file matches a render's normal output.videos exactly, since
+    every render in this application uses neutral color_adjustment values --
+    if that ever changes, a color-corrected clip and its neutral volume preview
+    would differ, and this fallback would return the wrong pixels.
+    """
+    namespace = request.get("cache_namespace")
+    try:
+        local = _volume_chain_video(namespace)
+    except ValueError as error:
+        return {"error": str(error)}
+    if local is None:
+        return {"error": "No cached video for this cache_namespace on this volume"}
+    payload = base64.b64encode(local.read_bytes()).decode("ascii")
+    return {
+        "images": [],
+        "videos": [{"filename": local.name, "type": "base64", "data": payload}],
+    }
+
+
 def handler(job):
     """Run the official handler and group video files separately for clients."""
     job_input = job.get("input") if isinstance(job, dict) else None
-    # A merge joins already-rendered chains and never touches ComfyUI, so it is
-    # handled before the cache root is selected for a generation job.
+    # Merge and fetch both read already-rendered video off the volume and never
+    # touch ComfyUI, so both are handled before the cache root is selected for
+    # a generation job.
     if isinstance(job_input, dict) and isinstance(job_input.get("merge"), dict):
         try:
             return _merge_chains(job_input["merge"])
         except (OSError, RuntimeError, ValueError) as error:
+            return {"error": str(error)}
+    if isinstance(job_input, dict) and isinstance(job_input.get("fetch"), dict):
+        try:
+            return _fetch_chain(job_input["fetch"])
+        except OSError as error:
             return {"error": str(error)}
 
     # ComfyUI and the handler are separate processes. The atomic control file is
