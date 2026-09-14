@@ -1,5 +1,20 @@
 # ComfyUI MiniMax H3 Extender
 
+## ClipWeave application integration — 2026-09-13
+
+ClipWeave sends normal H3 workflow requests with a trusted, chain-scoped
+`input.cache_namespace`. The frontend saves job state and video assets in
+Supabase, recovers accepted jobs without re-submitting GPU work, and uses signed
+storage URLs for playback.
+
+The customer-facing final **Merge videos** action now runs in the Next.js server
+with CPU FFmpeg. It selects the final cumulative video from every validated chain
+and stores the private export in Supabase, avoiding duplicated continuation
+footage and a new RunPod job. Keep `input.merge` documented as a worker capability,
+but do not assume the web product invokes it. Quality and aspect ratio are fixed
+for a project once clips exist so a chain never changes cache geometry mid-run.
+
+
 A ComfyUI custom node for **MiniMax H3** designed to generate long, continuous video sequences from multiple clips while preserving motion, visual continuity, and audio continuity between generations.
 
 The node combines **Ref2VA conditioning, Motion Context, disk caching, multi-clip generation, image references, audio references, and final video/audio decoding** into a much simpler workflow.

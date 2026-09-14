@@ -1,5 +1,10 @@
 # RunPod Serverless deployment
 
+## Cost provenance work — 2026-09-13
+
+The worker is being extended to return non-secret hardware metadata with each completed job: GPU model, VRAM, worker identifier and data centre when available. ClipWeave records that alongside RunPod's `executionTime`. This establishes which hardware served a render, but it is not by itself a billing invoice: RunPod's normal job-status payload does not provide an authoritative hourly charge. The application must snapshot the endpoint's configured hourly rate at submission and calculate `executionTimeMs / 3,600,000 × capturedRate`.
+
+Do not use a later GPU-catalog price to overwrite a historical estimate. A catalog lookup is useful for configuration assistance, but rates can vary by data centre and change after a job has completed.
 This repository builds a RunPod ComfyUI Serverless worker with the MiniMax H3 Extender installed. It keeps RunPod's official ComfyUI handler and accepts normal ComfyUI API-format workflows.
 
 ## Current deployment state
@@ -344,3 +349,4 @@ Completed MP4/MKV artifacts are returned in `output.videos`. Each entry contains
   }
 }
 ```
+

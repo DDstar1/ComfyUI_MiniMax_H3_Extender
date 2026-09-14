@@ -25,6 +25,15 @@ _CACHE_ROOT_FILE = Path(
 ).expanduser().resolve()
 _JOB_LOCK = threading.Lock()
 _original_get_history = base.get_history
+def _worker_metadata():
+    """Small, JSON-safe identity record for manual GPU-price lookup."""
+    try:
+        gpu = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True, text=True, timeout=5, check=False)
+        model = gpu.stdout.splitlines()[0].strip() if gpu.returncode == 0 and gpu.stdout.strip() else None
+    except OSError:
+        model = None
+    return {"gpu_model": model, "worker_id": os.environ.get("RUNPOD_POD_ID") or os.environ.get("RUNPOD_WORKER_ID")}
+
 
 
 def _history_with_video_outputs(prompt_id):
@@ -243,6 +252,35 @@ def _select_project_cache(job):
     return cache_root
 
 
+def _latest_chain_segment(namespace):
+    """Return the most recent clip segment and its volume-relative key."""
+    digest = _namespace_digest(namespace)
+    directory = _CACHE_BASE_ROOT / digest[:2] / digest / "chain_extender_1.final.video"
+    segments = sorted(
+        (path for path in directory.glob("ref2va_*.*") if path.is_file() and path.stat().st_size > 0),
+        key=lambda path: int(re.search(r"ref2va_(\d+)\.", path.name).group(1)) if re.search(r"ref2va_(\d+)\.", path.name) else -1,
+    )
+    if not segments:
+        return None, None
+    segment = segments[-1]
+    return segment, segment.relative_to(_CACHE_BASE_ROOT.parent).as_posix()
+
+
+def _volume_video_result(namespace):
+    """Return metadata only. The MP4 remains on the network volume."""
+    segment, key = _latest_chain_segment(namespace)
+    if segment is None:
+        return {"error": "No rendered video was found in this chain's volume cache"}
+    return {
+        "images": [],
+        "videos": [{
+            "filename": segment.name,
+            "type": "runpod-volume",
+            "volume_key": key,
+            "bytes": segment.stat().st_size,
+        }],
+    }
+
 def _fetch_chain(request):
     """Recover an already-finished chain video that a job's own /status expired.
 
@@ -261,20 +299,10 @@ def _fetch_chain(request):
     its neutral volume cache would differ, and this fallback would return the
     wrong pixels.
     """
-    namespace = request.get("cache_namespace")
-    with tempfile.TemporaryDirectory(prefix="comfytr-fetch-") as workspace:
-        try:
-            local = _volume_chain_video(namespace, workspace=Path(workspace))
-        except ValueError as error:
-            return {"error": str(error)}
-        if local is None:
-            return {"error": "No cached video for this cache_namespace on this volume"}
-        payload = base64.b64encode(local.read_bytes()).decode("ascii")
-        filename = local.name
-    return {
-        "images": [],
-        "videos": [{"filename": filename, "type": "base64", "data": payload}],
-    }
+    try:
+        return _volume_video_result(request.get("cache_namespace"))
+    except (OSError, ValueError) as error:
+        return {"error": str(error)}
 
 
 def handler(job):
@@ -315,7 +343,10 @@ def handler(job):
 
     result["images"] = images
     if videos:
-        result["videos"] = videos
+        try:
+            return _volume_video_result(job_input.get("cache_namespace"))
+        except (OSError, ValueError) as error:
+            return {"error": str(error)}
     return result
 
 
