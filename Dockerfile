@@ -23,6 +23,10 @@ RUN apt-get update \
 COPY start-with-ssh.sh /start-with-ssh.sh
 RUN chmod 755 /start-with-ssh.sh
 
+# RunPod maps these ports from the endpoint template. ComfyUI itself is started
+# by the inherited worker entrypoint on 8188; sshd is started by our wrapper.
+EXPOSE 8188 22
+
 COPY . /comfyui/custom_nodes/ComfyUI_MiniMax_H3_Extender
 
 # Keep the official handler implementation and wrap it with support for video
