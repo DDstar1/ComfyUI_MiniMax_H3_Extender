@@ -492,8 +492,17 @@ def handler(job):
             return {"error": str(error)}
     if isinstance(job_input, dict) and isinstance(job_input.get("fetch"), dict):
         try:
-            return _fetch_chain(job_input["fetch"])
-        except OSError as error:
+            result = _fetch_chain(job_input["fetch"])
+            # Recovery jobs use the same one-use upload and completion callback
+            # as a normal render, so a browser does not need to poll a second
+            # time before the recovered video appears in ClipWeave.
+            if "error" not in result and job_input.get("delivery"):
+                _deliver_video_to_supabase(
+                    job_input["delivery"],
+                    job_input["fetch"].get("cache_namespace"),
+                )
+            return result
+        except (OSError, RuntimeError, ValueError, requests.RequestException) as error:
             return {"error": str(error)}
 
     # ComfyUI and the handler are separate processes. The atomic control file is
