@@ -27,7 +27,7 @@ _CACHE_ROOT_FILE = Path(
 ).expanduser().resolve()
 _JOB_LOCK = threading.Lock()
 _original_get_history = base.get_history
-def _worker_metadata():
+def _worker_metadata(worker_rate_usd_per_second=None):
     """Return a small, JSON-safe GPU snapshot for render diagnostics."""
     try:
         gpu = subprocess.run(
@@ -46,12 +46,19 @@ def _worker_metadata():
     except OSError:
         values = []
         model = None
+    try:
+        rate = float(worker_rate_usd_per_second)
+        if rate < 0:
+            rate = None
+    except (TypeError, ValueError):
+        rate = None
     return {
         "gpu_model": model,
         "vram_total_mb": int(values[1]) if len(values) > 1 and values[1].isdigit() else None,
         "vram_used_mb": int(values[2]) if len(values) > 2 and values[2].isdigit() else None,
         "gpu_utilization_percent": int(values[3]) if len(values) > 3 and values[3].isdigit() else None,
         "worker_id": os.environ.get("RUNPOD_POD_ID") or os.environ.get("RUNPOD_WORKER_ID"),
+        "worker_rate_usd_per_second": rate,
     }
 
 
@@ -329,7 +336,7 @@ def _latest_chain_segment(namespace):
     return segment, segment.relative_to(_CACHE_BASE_ROOT.parent).as_posix()
 
 
-def _volume_video_result(namespace):
+def _volume_video_result(namespace, worker_rate_usd_per_second=None):
     """Return metadata only. The MP4 remains on the network volume."""
     segment, key = _latest_chain_segment(namespace)
     if segment is None:
@@ -342,7 +349,7 @@ def _volume_video_result(namespace):
             "volume_key": key,
             "bytes": segment.stat().st_size,
         }],
-        "worker_metadata": _worker_metadata(),
+        "worker_metadata": _worker_metadata(worker_rate_usd_per_second),
     }
 
 def _fetch_chain(request):
@@ -372,6 +379,13 @@ def _fetch_chain(request):
 def handler(job):
     """Run the official handler and group video files separately for clients."""
     job_input = job.get("input") if isinstance(job, dict) else None
+    worker_rate = job_input.get("worker_rate_usd_per_second") if isinstance(job_input, dict) else None
+    try:
+        rate_value = float(worker_rate)
+    except (TypeError, ValueError):
+        rate_value = None
+    if rate_value is not None and rate_value >= 0:
+        print(f"[ClipWeave] Worker rate: ${rate_value:.6f}/s (${rate_value * 3600:.4f}/hr)", flush=True)
     # Merge and fetch both read already-rendered video off the volume and never
     # touch ComfyUI, so both are handled before the cache root is selected for
     # a generation job.
@@ -420,7 +434,7 @@ def handler(job):
     result["images"] = images
     if videos:
         try:
-            return _volume_video_result(job_input.get("cache_namespace"))
+            return _volume_video_result(job_input.get("cache_namespace"), rate_value)
         except (OSError, ValueError) as error:
             return {"error": str(error)}
     return result
