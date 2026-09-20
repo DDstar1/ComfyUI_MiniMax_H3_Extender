@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.request
 
 import runpod
@@ -27,6 +28,59 @@ _CACHE_ROOT_FILE = Path(
 ).expanduser().resolve()
 _JOB_LOCK = threading.Lock()
 _original_get_history = base.get_history
+
+
+def _comfy_process_args():
+    """Return the active ComfyUI command line without depending on a fixed PID."""
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return []
+    for candidate in proc.iterdir():
+        if not candidate.name.isdigit():
+            continue
+        try:
+            args = (candidate / "cmdline").read_bytes().decode("utf-8", errors="replace").split("\0")
+        except OSError:
+            continue
+        if any("main.py" in arg for arg in args):
+            return [arg for arg in args if arg]
+    return []
+
+
+def _attention_metadata():
+    """Describe the selected attention mode, rather than inferring it from packages."""
+    args = _comfy_process_args()
+    try:
+        import sageattention
+
+        sage_version = getattr(sageattention, "__version__", "installed")
+    except ImportError:
+        sage_version = None
+    return {
+        "sageattention_version": sage_version,
+        "sageattention_requested": "--use-sage-attention" in args,
+        "comfyui_args": args,
+    }
+
+
+def _runtime_metadata(worker_rate_usd_per_second=None):
+    """Capture runtime versions and the active attention selection for a render."""
+    metadata = _worker_metadata(worker_rate_usd_per_second)
+    try:
+        import torch
+
+        metadata.update(
+            {
+                "torch_version": torch.__version__,
+                "torch_cuda_version": torch.version.cuda,
+            }
+        )
+    except ImportError:
+        metadata.update({"torch_version": None, "torch_cuda_version": None})
+    metadata.update(_attention_metadata())
+    return metadata
+
+
 def _worker_metadata(worker_rate_usd_per_second=None):
     """Return a small, JSON-safe GPU snapshot for render diagnostics."""
     try:
@@ -386,6 +440,8 @@ def handler(job):
         rate_value = None
     if rate_value is not None and rate_value >= 0:
         print(f"[ClipWeave] Worker rate: ${rate_value:.6f}/s (${rate_value * 3600:.4f}/hr)", flush=True)
+    started_at = time.monotonic()
+    print(f"[ClipWeave] Runtime: {_runtime_metadata(rate_value)}", flush=True)
     # Merge and fetch both read already-rendered video off the volume and never
     # touch ComfyUI, so both are handled before the cache root is selected for
     # a generation job.
@@ -422,6 +478,12 @@ def handler(job):
         except (OSError, ValueError) as error:
             return {"error": str(error)}
         result = base.handler(job)
+    elapsed_seconds = round(time.monotonic() - started_at, 3)
+    print(
+        f"[ClipWeave] Render finished in {elapsed_seconds}s; "
+        f"runtime={_runtime_metadata(rate_value)}",
+        flush=True,
+    )
     if not isinstance(result, dict) or "images" not in result:
         return result
 
