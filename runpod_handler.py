@@ -427,8 +427,16 @@ def _deliver_video_to_supabase(delivery, namespace):
             headers={"Content-Type": "video/mp4", "x-upsert": "false"}, timeout=600,
         )
     upload.raise_for_status()
+    # Configure this once on the endpoint. The per-job URL remains a fallback
+    # for older workers and local development.
+    callback_origin = os.environ.get("CLIPWEAVE_CALLBACK_ORIGIN", "").strip().rstrip("/")
+    completion_url = (
+        f"{callback_origin}/api/renders/complete"
+        if callback_origin.startswith("https://")
+        else str(delivery["completion_url"])
+    )
     completed = requests.post(
-        str(delivery["completion_url"]),
+        completion_url,
         json={
             "jobId": delivery["job_id"], "path": delivery["storage_path"],
             "filename": segment.name, "bytes": segment.stat().st_size,
