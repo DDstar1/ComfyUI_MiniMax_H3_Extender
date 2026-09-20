@@ -3,6 +3,26 @@
 ARG WORKER_COMFYUI_VERSION=5.10.0
 FROM runpod/worker-comfyui:${WORKER_COMFYUI_VERSION}-base
 
+# Serverless workers normally expose only the web terminal. Install an SSH
+# daemon for direct diagnostics; its authorized key is supplied at runtime by
+# the endpoint template, never baked into this public image.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /run/sshd /root/.ssh \
+    && chmod 700 /root/.ssh \
+    && printf '%s\n' \
+      'PermitRootLogin prohibit-password' \
+      'PasswordAuthentication no' \
+      'KbdInteractiveAuthentication no' \
+      'ChallengeResponseAuthentication no' \
+      'UsePAM no' \
+      'X11Forwarding no' \
+      >> /etc/ssh/sshd_config
+
+COPY start-with-ssh.sh /start-with-ssh.sh
+RUN chmod 755 /start-with-ssh.sh
+
 COPY . /comfyui/custom_nodes/ComfyUI_MiniMax_H3_Extender
 
 # Keep the official handler implementation and wrap it with support for video
@@ -34,3 +54,7 @@ RUN uv pip install --no-cache -r /comfyui/custom_nodes/ComfyUI_MiniMax_H3_Extend
 # replacement worker can reuse validated clip state.
 ENV H3_CACHE_ROOT=/runpod-volume/comfytr-cache
 ENV H3_CACHE_ROOT_FILE=/tmp/comfytr-h3-cache-root
+
+# Preserve the base image's NVIDIA entrypoint while replacing its /start.sh
+# command with a small wrapper that starts sshd first.
+CMD ["bash", "/start-with-ssh.sh"]
