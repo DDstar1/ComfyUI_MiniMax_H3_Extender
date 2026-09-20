@@ -406,6 +406,38 @@ def _volume_video_result(namespace, worker_rate_usd_per_second=None):
         "worker_metadata": _worker_metadata(worker_rate_usd_per_second),
     }
 
+
+def _deliver_video_to_supabase(delivery, namespace):
+    """Upload a finished segment through a one-use signed URL and publish it.
+
+    The trusted application creates both URLs. This worker does not hold any
+    Supabase credential and cannot choose a different object's storage path.
+    """
+    if not isinstance(delivery, dict):
+        return False
+    required = ("upload_url", "completion_url", "job_id", "storage_path", "expires_at", "token")
+    if any(not delivery.get(key) for key in required):
+        return False
+    segment, _ = _latest_chain_segment(namespace)
+    if segment is None:
+        raise RuntimeError("No rendered video was found for direct delivery")
+    with segment.open("rb") as handle:
+        upload = requests.put(
+            str(delivery["upload_url"]), data=handle,
+            headers={"Content-Type": "video/mp4", "x-upsert": "false"}, timeout=600,
+        )
+    upload.raise_for_status()
+    completed = requests.post(
+        str(delivery["completion_url"]),
+        json={
+            "jobId": delivery["job_id"], "path": delivery["storage_path"],
+            "filename": segment.name, "bytes": segment.stat().st_size,
+            "expiresAt": delivery["expires_at"], "token": delivery["token"],
+        }, timeout=30,
+    )
+    completed.raise_for_status()
+    return True
+
 def _fetch_chain(request):
     """Recover an already-finished chain video that a job's own /status expired.
 
@@ -495,6 +527,15 @@ def handler(job):
 
     result["images"] = images
     if videos:
+        try:
+            if _deliver_video_to_supabase(job_input.get("delivery"), job_input.get("cache_namespace")):
+                print("[ClipWeave] Video delivered to Supabase.", flush=True)
+                return {"images": [], "videos": [], "delivered": True,
+                        "worker_metadata": _worker_metadata(rate_value)}
+        except (OSError, ValueError, requests.RequestException) as error:
+            # Return the volume key as the durable fallback. The application
+            # can still ingest it when a delivery URL has expired or is down.
+            print(f"[ClipWeave] Direct video delivery failed: {error}", flush=True)
         try:
             return _volume_video_result(job_input.get("cache_namespace"), rate_value)
         except (OSError, ValueError) as error:
