@@ -12,4 +12,9 @@ else
   echo "[ClipWeave] SSH is disabled: SSH_AUTHORIZED_KEY is not configured."
 fi
 
+# The inherited worker keeps ComfyUI on loopback for its queue handler. Expose
+# a separate HTTP port for the authenticated RunPod proxy without altering the
+# handler's local API address.
+python /comfyui-web-proxy.py &
+
 exec /start.sh

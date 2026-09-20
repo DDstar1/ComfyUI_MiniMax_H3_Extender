@@ -20,12 +20,12 @@ RUN apt-get update \
       'X11Forwarding no' \
       >> /etc/ssh/sshd_config
 
-COPY start-with-ssh.sh /start-with-ssh.sh
+COPY start-with-ssh.sh comfyui-web-proxy.py /start-with-ssh.sh /
 RUN chmod 755 /start-with-ssh.sh
 
 # RunPod maps these ports from the endpoint template. ComfyUI itself is started
 # by the inherited worker entrypoint on 8188; sshd is started by our wrapper.
-EXPOSE 8188 22
+EXPOSE 8188 8189 22
 
 COPY . /comfyui/custom_nodes/ComfyUI_MiniMax_H3_Extender
 
