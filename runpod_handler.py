@@ -13,10 +13,12 @@ import urllib.request
 
 import runpod
 import runpod_base_handler as base
+import requests
 
 
 _VIDEO_KEYS = {"videos", "gifs", "h3_outputs"}
 _VIDEO_EXTENSIONS = {".avi", ".gif", ".mkv", ".mov", ".mp4", ".webm"}
+_VOICE_EXTENSIONS = {".flac", ".m4a", ".mp3", ".ogg", ".wav"}
 _CACHE_BASE_ROOT = Path(
     os.environ.get("H3_CACHE_ROOT", "/runpod-volume/comfytr-cache")
 ).expanduser().resolve()
@@ -135,6 +137,49 @@ def _find_ffmpeg():
     if exe:
         return exe
     raise RuntimeError("Merge: no ffmpeg binary is available in this image")
+
+
+def _prepare_voice_references(job_input):
+    """Upload trusted voice samples to ComfyUI's active input directory.
+
+    The official worker uploads images through ComfyUI's HTTP API instead of
+    assuming a container path. Voice references need the same treatment: the
+    base image can configure a different input directory from ``/comfyui/input``.
+    Uploading through ComfyUI ensures LoadAudio resolves the file it validates.
+    """
+    if not isinstance(job_input, dict):
+        return
+    audios = job_input.get("audios", [])
+    if audios is None:
+        return
+    if not isinstance(audios, list) or len(audios) > 3:
+        raise ValueError("Voice references must be a list of at most three audio files")
+    for item in audios:
+        if not isinstance(item, dict):
+            raise ValueError("Voice reference is invalid")
+        name = str(item.get("name") or "")
+        payload = str(item.get("audio") or "")
+        if Path(name).name != name or Path(name).suffix.lower() not in _VOICE_EXTENSIONS:
+            raise ValueError("Voice reference filename is invalid")
+        match = re.fullmatch(r"data:audio/(?:mpeg|wav|x-wav|mp4|x-m4a|ogg|flac);base64,([A-Za-z0-9+/=]+)", payload, re.IGNORECASE)
+        if not match:
+            raise ValueError("Voice reference must be base64 audio data")
+        raw = base64.b64decode(match.group(1), validate=True)
+        if not raw or len(raw) > 12 * 1024 * 1024:
+            raise ValueError("Voice reference must be between 1 byte and 12 MB")
+        mime_type = match.group(0).split(";", 1)[0][5:]
+        try:
+            response = requests.post(
+                f"http://{base.COMFY_HOST}/upload/image",
+                files={
+                    "image": (name, raw, mime_type),
+                    "overwrite": (None, "true"),
+                },
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.RequestException as error:
+            raise ValueError(f"Could not upload voice reference '{name}': {error}") from error
 
 
 def _concat(ffmpeg, sources, destination):
@@ -329,6 +374,18 @@ def handler(job):
     with _JOB_LOCK:
         try:
             _select_project_cache(job)
+            if not base.check_server(
+                f"http://{base.COMFY_HOST}/",
+                base.COMFY_API_AVAILABLE_MAX_RETRIES,
+                base.COMFY_API_AVAILABLE_INTERVAL_MS,
+            ):
+                return {
+                    "error": (
+                        f"ComfyUI server ({base.COMFY_HOST}) was not reachable "
+                        "while preparing voice references."
+                    )
+                }
+            _prepare_voice_references(job_input)
         except (OSError, ValueError) as error:
             return {"error": str(error)}
         result = base.handler(job)
