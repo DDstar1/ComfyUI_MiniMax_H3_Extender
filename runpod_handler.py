@@ -28,13 +28,31 @@ _CACHE_ROOT_FILE = Path(
 _JOB_LOCK = threading.Lock()
 _original_get_history = base.get_history
 def _worker_metadata():
-    """Small, JSON-safe identity record for manual GPU-price lookup."""
+    """Return a small, JSON-safe GPU snapshot for render diagnostics."""
     try:
-        gpu = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True, text=True, timeout=5, check=False)
-        model = gpu.stdout.splitlines()[0].strip() if gpu.returncode == 0 and gpu.stdout.strip() else None
+        gpu = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.total,memory.used,utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        values = [value.strip() for value in gpu.stdout.splitlines()[0].split(",")] if gpu.returncode == 0 and gpu.stdout.strip() else []
+        model = values[0] if values else None
     except OSError:
+        values = []
         model = None
-    return {"gpu_model": model, "worker_id": os.environ.get("RUNPOD_POD_ID") or os.environ.get("RUNPOD_WORKER_ID")}
+    return {
+        "gpu_model": model,
+        "vram_total_mb": int(values[1]) if len(values) > 1 and values[1].isdigit() else None,
+        "vram_used_mb": int(values[2]) if len(values) > 2 and values[2].isdigit() else None,
+        "gpu_utilization_percent": int(values[3]) if len(values) > 3 and values[3].isdigit() else None,
+        "worker_id": os.environ.get("RUNPOD_POD_ID") or os.environ.get("RUNPOD_WORKER_ID"),
+    }
 
 
 
@@ -324,6 +342,7 @@ def _volume_video_result(namespace):
             "volume_key": key,
             "bytes": segment.stat().st_size,
         }],
+        "worker_metadata": _worker_metadata(),
     }
 
 def _fetch_chain(request):
