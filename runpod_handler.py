@@ -407,7 +407,7 @@ def _volume_video_result(namespace, worker_rate_usd_per_second=None):
     }
 
 
-def _deliver_video_to_supabase(delivery, namespace, execution_ms=None):
+def _deliver_video_to_supabase(delivery, namespace, execution_ms=None, queue_and_cold_boot_ms=None):
     """Upload a finished segment through a one-use signed URL and publish it.
 
     The trusted application creates both URLs. This worker does not hold any
@@ -441,6 +441,7 @@ def _deliver_video_to_supabase(delivery, namespace, execution_ms=None):
             "jobId": delivery["job_id"], "path": delivery["storage_path"],
             "filename": segment.name, "bytes": segment.stat().st_size,
             **({"executionMs": int(execution_ms)} if execution_ms is not None else {}),
+            **({"queueAndColdBootMs": int(queue_and_cold_boot_ms)} if queue_and_cold_boot_ms is not None else {}),
             "expiresAt": delivery["expires_at"], "token": delivery["token"],
         }, timeout=30,
     )
@@ -482,6 +483,11 @@ def handler(job):
     if rate_value is not None and rate_value >= 0:
         print(f"[ClipWeave] Worker rate: ${rate_value:.6f}/s (${rate_value * 3600:.4f}/hr)", flush=True)
     started_at = time.monotonic()
+    started_epoch_ms = int(time.time() * 1000)
+    submitted_at_ms = job_input.get("submitted_at_ms") if isinstance(job_input, dict) else None
+    queue_and_cold_boot_ms = (started_epoch_ms - int(submitted_at_ms)) if isinstance(submitted_at_ms, (int, float)) else None
+    if queue_and_cold_boot_ms is not None:
+        print(f"[ClipWeave] Queue + cold boot: {queue_and_cold_boot_ms / 1000:.3f}s", flush=True)
     print(f"[ClipWeave] Runtime: {_runtime_metadata(rate_value)}", flush=True)
     # Merge and fetch both read already-rendered video off the volume and never
     # touch ComfyUI, so both are handled before the cache root is selected for
@@ -546,7 +552,7 @@ def handler(job):
     result["images"] = images
     if videos:
         try:
-            if _deliver_video_to_supabase(job_input.get("delivery"), job_input.get("cache_namespace"), elapsed_seconds * 1000):
+            if _deliver_video_to_supabase(job_input.get("delivery"), job_input.get("cache_namespace"), elapsed_seconds * 1000, queue_and_cold_boot_ms):
                 print("[ClipWeave] Video delivered to Supabase.", flush=True)
                 return {"images": [], "videos": [], "delivered": True,
                         "worker_metadata": _worker_metadata(rate_value)}
