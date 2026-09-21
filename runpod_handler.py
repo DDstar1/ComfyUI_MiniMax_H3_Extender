@@ -407,7 +407,7 @@ def _volume_video_result(namespace, worker_rate_usd_per_second=None):
     }
 
 
-def _deliver_video_to_supabase(delivery, namespace):
+def _deliver_video_to_supabase(delivery, namespace, execution_ms=None):
     """Upload a finished segment through a one-use signed URL and publish it.
 
     The trusted application creates both URLs. This worker does not hold any
@@ -440,6 +440,7 @@ def _deliver_video_to_supabase(delivery, namespace):
         json={
             "jobId": delivery["job_id"], "path": delivery["storage_path"],
             "filename": segment.name, "bytes": segment.stat().st_size,
+            **({"executionMs": int(execution_ms)} if execution_ms is not None else {}),
             "expiresAt": delivery["expires_at"], "token": delivery["token"],
         }, timeout=30,
     )
@@ -545,7 +546,7 @@ def handler(job):
     result["images"] = images
     if videos:
         try:
-            if _deliver_video_to_supabase(job_input.get("delivery"), job_input.get("cache_namespace")):
+            if _deliver_video_to_supabase(job_input.get("delivery"), job_input.get("cache_namespace"), elapsed_seconds * 1000):
                 print("[ClipWeave] Video delivered to Supabase.", flush=True)
                 return {"images": [], "videos": [], "delivered": True,
                         "worker_metadata": _worker_metadata(rate_value)}
