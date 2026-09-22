@@ -27,6 +27,9 @@ _CACHE_BASE_ROOT = Path(
 _CACHE_ROOT_FILE = Path(
     os.environ.get("H3_CACHE_ROOT_FILE", "/tmp/comfytr-h3-cache-root")
 ).expanduser().resolve()
+_COMFY_OUTPUT_ROOT = Path(
+    os.environ.get("COMFY_OUTPUT_DIR", "/comfyui/output")
+).expanduser().resolve()
 _JOB_LOCK = threading.Lock()
 _original_get_history = base.get_history
 
@@ -502,6 +505,45 @@ def _latest_chain_segment(namespace):
     return segment, segment.relative_to(_CACHE_BASE_ROOT.parent).as_posix()
 
 
+def _output_artifact_path(artifact):
+    """Resolve a ComfyUI output artifact without allowing path traversal."""
+    if not isinstance(artifact, dict):
+        return None
+    filename = artifact.get("filename")
+    subfolder = artifact.get("subfolder", "")
+    if not isinstance(filename, str) or not filename:
+        return None
+    if not isinstance(subfolder, str):
+        return None
+    candidate = (_COMFY_OUTPUT_ROOT / subfolder / filename).resolve()
+    try:
+        candidate.relative_to(_COMFY_OUTPUT_ROOT)
+    except ValueError:
+        return None
+    return candidate if candidate.is_file() else None
+
+
+def _sync_audio_output_to_chain(namespace, source):
+    """Replace the video-only Extender sidecar with ComfyUI's muxed A/V output."""
+    if not source or not _has_audio_stream(source):
+        return None
+    target, _ = _latest_chain_segment(namespace)
+    if target is None:
+        return None
+    temporary = target.with_name(f".{target.name}.audio-sync-{os.getpid()}.tmp")
+    try:
+        shutil.copyfile(source, temporary)
+        if not _has_audio_stream(temporary):
+            raise RuntimeError("ComfyUI output lost its audio stream before cache sync")
+        os.replace(temporary, target)
+        return target
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _volume_video_result(namespace, worker_rate_usd_per_second=None):
     """Return metadata only. The MP4 remains on the network volume."""
     segment, key = _latest_chain_segment(namespace)
@@ -519,7 +561,7 @@ def _volume_video_result(namespace, worker_rate_usd_per_second=None):
     }
 
 
-def _deliver_video_to_supabase(delivery, namespace, execution_ms=None, queue_and_cold_boot_ms=None):
+def _deliver_video_to_supabase(delivery, namespace, execution_ms=None, queue_and_cold_boot_ms=None, source=None):
     """Upload a finished segment through a one-use signed URL and publish it.
 
     The trusted application creates both URLs. This worker does not hold any
@@ -530,7 +572,11 @@ def _deliver_video_to_supabase(delivery, namespace, execution_ms=None, queue_and
     required = ("upload_url", "completion_url", "job_id", "storage_path", "expires_at", "token")
     if any(not delivery.get(key) for key in required):
         return False
-    segment, _ = _latest_chain_segment(namespace)
+    segment = Path(source) if source else None
+    if segment is not None and (not segment.is_file() or not _has_audio_stream(segment)):
+        segment = None
+    if segment is None:
+        segment, _ = _latest_chain_segment(namespace)
     if segment is None:
         raise RuntimeError("No rendered video was found for direct delivery")
     with segment.open("rb") as handle:
@@ -663,8 +709,16 @@ def handler(job):
 
     result["images"] = images
     if videos:
+        output_video = _output_artifact_path(videos[-1])
         try:
-            if _deliver_video_to_supabase(job_input.get("delivery"), job_input.get("cache_namespace"), elapsed_seconds * 1000, queue_and_cold_boot_ms):
+            synced = _sync_audio_output_to_chain(job_input.get("cache_namespace"), output_video)
+            if synced:
+                output_video = synced
+                print("[ClipWeave] Synced muxed audio into the chain cache.", flush=True)
+        except (OSError, RuntimeError, ValueError) as error:
+            print(f"[ClipWeave] Could not sync audio to the chain cache: {error}", flush=True)
+        try:
+            if _deliver_video_to_supabase(job_input.get("delivery"), job_input.get("cache_namespace"), elapsed_seconds * 1000, queue_and_cold_boot_ms, output_video):
                 print("[ClipWeave] Video delivered to Supabase.", flush=True)
                 return {"images": [], "videos": [], "delivered": True,
                         "worker_metadata": _worker_metadata(rate_value)}
