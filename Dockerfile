@@ -6,8 +6,8 @@ FROM runpod/worker-comfyui:${WORKER_COMFYUI_VERSION}-base
 # Serverless workers normally expose only the web terminal. Install an SSH
 # daemon for direct diagnostics; its authorized key is supplied at runtime by
 # the endpoint template, never baked into this public image.
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server \
+RUN apt-get -o Acquire::Retries=5 update \
+    && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends openssh-server \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /run/sshd /root/.ssh \
     && chmod 700 /root/.ssh \
