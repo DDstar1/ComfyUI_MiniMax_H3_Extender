@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -144,6 +145,116 @@ def _namespace_digest(namespace):
     return hashlib.sha256(namespace.encode("utf-8")).hexdigest()
 
 
+def _ffprobe_duration(path):
+    """Return an MP4 duration without loading the media into Python memory."""
+    probe = shutil.which("ffprobe")
+    if not probe:
+        raise RuntimeError("Audio delivery requires ffprobe, but it is not installed")
+    completed = subprocess.run(
+        [
+            probe,
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"Could not inspect rendered video duration: {completed.stderr[-1000:]}")
+    try:
+        duration = float(completed.stdout.strip())
+    except ValueError as error:
+        raise RuntimeError("Rendered video did not report a valid duration") from error
+    if duration <= 0:
+        raise RuntimeError("Rendered video has no playable duration")
+    return duration
+
+
+def _has_audio_stream(path):
+    probe = shutil.which("ffprobe")
+    if not probe:
+        return False
+    completed = subprocess.run(
+        [probe, "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    return completed.returncode == 0 and bool(completed.stdout.strip())
+
+
+def _segment_preview_offset(cache_directory, segment_index):
+    """Find a segment's start time in the muxed chain preview.
+
+    The Final Decode cache deliberately stores H.264-only sidecars.  The
+    companion preview is the authoritative muxed A/V timeline.  Its manifest
+    gives exact frame boundaries, including continuation overlap trims.
+    """
+    manifest_path = cache_directory / "chain_extender_1.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        segments = manifest.get("segments", [])
+        fps = float(manifest.get("fps", 24.0))
+        if not isinstance(segments, list) or not (0 <= segment_index < len(segments)) or fps <= 0:
+            raise ValueError("segment is outside the current manifest")
+        frames_before = 0
+        for index, entry in enumerate(segments[:segment_index]):
+            frames_before += int(entry.get("frames", 0)) - (int(entry.get("trim_frames", 0)) if index else 0)
+        return max(0.0, frames_before / fps)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        # A cache may have just been truncated after an edit while an older
+        # sidecar remains.  In that case its preview belongs to the latest clip
+        # and starts at zero.
+        return 0.0
+
+
+def _ensure_segment_audio(segment):
+    """Atomically replace a video-only H3 sidecar with its muxed A/V version."""
+    segment = Path(segment)
+    if _has_audio_stream(segment):
+        return segment
+    cache_directory = segment.parent.parent
+    preview = cache_directory / "chain_extender_1.preview.mp4"
+    match = re.match(r"ref2va_(\d+)\.", segment.name)
+    if not preview.is_file() or match is None:
+        return segment
+
+    # H3's exact-final sidecars have no audio track.  Mux the corresponding
+    # range of the lossless-preview audio so direct delivery and later merges
+    # keep the generated soundtrack.
+    output = segment.with_name(f".{segment.stem}.audio-{os.getpid()}.tmp.mp4")
+    log = output.with_suffix(".log")
+    try:
+        duration = _ffprobe_duration(segment)
+        offset = _segment_preview_offset(cache_directory, int(match.group(1)))
+        command = [
+            _find_ffmpeg(), "-y",
+            "-i", str(segment),
+            "-ss", f"{offset:.9f}", "-t", f"{duration:.9f}", "-i", str(preview),
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+            "-shortest", "-movflags", "+faststart", str(output),
+        ]
+        with open(log, "wb") as handle:
+            completed = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=handle)
+        if completed.returncode != 0 or not output.exists() or output.stat().st_size <= 0:
+            detail = log.read_bytes()[-2000:].decode("utf-8", errors="replace") if log.exists() else ""
+            raise RuntimeError(f"Could not mux generated audio into the rendered clip.\n{detail}")
+        os.replace(output, segment)
+    finally:
+        for artifact in (output, log):
+            try:
+                artifact.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return segment
+
+
 def _volume_chain_video(namespace, workspace=None):
     """Locate a chain's assembled video in its cache directory on the volume.
 
@@ -181,6 +292,7 @@ def _volume_chain_video(namespace, workspace=None):
     )
     if not segments:
         return None
+    segments = [_ensure_segment_audio(path) for path in segments]
     if len(segments) == 1:
         return segments[0]
     if workspace is None:
@@ -386,7 +498,7 @@ def _latest_chain_segment(namespace):
     )
     if not segments:
         return None, None
-    segment = segments[-1]
+    segment = _ensure_segment_audio(segments[-1])
     return segment, segment.relative_to(_CACHE_BASE_ROOT.parent).as_posix()
 
 
