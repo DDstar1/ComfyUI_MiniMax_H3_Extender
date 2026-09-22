@@ -792,35 +792,37 @@ def handler(job):
         except (OSError, RuntimeError, ValueError) as error:
             return {"error": str(error)}
         result = base.handler(job)
+        elapsed_seconds = round(time.monotonic() - started_at, 3)
+        print(
+            f"[ClipWeave] Render finished in {elapsed_seconds}s; "
+            f"runtime={_runtime_metadata(rate_value)}",
+            flush=True,
+        )
+        if not isinstance(result, dict) or "images" not in result:
+            return result
+
+        images = []
+        videos = []
+        for artifact in result.get("images", []):
+            extension = os.path.splitext(str(artifact.get("filename", "")))[1].lower()
+            (videos if extension in _VIDEO_EXTENSIONS else images).append(artifact)
+
+        result["images"] = images
+        output_video = _output_artifact_path(videos[-1]) if videos else None
+        if videos:
+            try:
+                synced = _sync_audio_output_to_chain(job_input.get("cache_namespace"), output_video)
+                if synced:
+                    output_video = synced
+                    print("[ClipWeave] Synced muxed audio into the chain cache.", flush=True)
+            except (OSError, RuntimeError, ValueError) as error:
+                print(f"[ClipWeave] Could not sync audio to the chain cache: {error}", flush=True)
         try:
             _sync_context_to_r2(job_input.get("cache_namespace"), cache_root)
         except Exception as error:
             return {"error": f"Could not persist motion context to R2: {error}"}
-    elapsed_seconds = round(time.monotonic() - started_at, 3)
-    print(
-        f"[ClipWeave] Render finished in {elapsed_seconds}s; "
-        f"runtime={_runtime_metadata(rate_value)}",
-        flush=True,
-    )
-    if not isinstance(result, dict) or "images" not in result:
-        return result
-
-    images = []
-    videos = []
-    for artifact in result.get("images", []):
-        extension = os.path.splitext(str(artifact.get("filename", "")))[1].lower()
-        (videos if extension in _VIDEO_EXTENSIONS else images).append(artifact)
-
-    result["images"] = images
-    if videos:
-        output_video = _output_artifact_path(videos[-1])
-        try:
-            synced = _sync_audio_output_to_chain(job_input.get("cache_namespace"), output_video)
-            if synced:
-                output_video = synced
-                print("[ClipWeave] Synced muxed audio into the chain cache.", flush=True)
-        except (OSError, RuntimeError, ValueError) as error:
-            print(f"[ClipWeave] Could not sync audio to the chain cache: {error}", flush=True)
+        if not videos:
+            return result
         try:
             if _deliver_video_to_supabase(job_input.get("delivery"), job_input.get("cache_namespace"), elapsed_seconds * 1000, queue_and_cold_boot_ms, output_video):
                 print("[ClipWeave] Video delivered to Supabase.", flush=True)
@@ -834,7 +836,6 @@ def handler(job):
             return _volume_video_result(job_input.get("cache_namespace"), rate_value)
         except (OSError, ValueError) as error:
             return {"error": str(error)}
-    return result
 
 
 if __name__ == "__main__":
