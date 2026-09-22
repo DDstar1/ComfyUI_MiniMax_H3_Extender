@@ -159,7 +159,11 @@ def _r2_client():
     access_key = os.environ.get("CLOUDFLARE_ACCESS_KEY_ID", "").strip()
     secret_key = os.environ.get("CLOUDFLARE_SECRET_ACCESS_KEY", "").strip()
     if not endpoint or not access_key or not secret_key or not _R2_BUCKET:
-        return None
+        raise RuntimeError(
+            "Cloudflare R2 motion-context storage is not configured. "
+            "Set CLOUDFLARE_S3_API_ENDPOINT, CLOUDFLARE_ACCESS_KEY_ID, "
+            "CLOUDFLARE_SECRET_ACCESS_KEY, and CLOUDFLARE_R2_BUCKET."
+        )
     with _r2_client_lock:
         if _r2_client_instance is None:
             import boto3
@@ -191,8 +195,6 @@ def _r2_relative_path(key, prefix):
 def _sync_context_from_r2(namespace, cache_root):
     """Materialize the authoritative chain cache before a render starts."""
     client = _r2_client()
-    if client is None:
-        return False
     prefix = _r2_context_prefix(namespace)
     objects = []
     for page in client.get_paginator("list_objects_v2").paginate(Bucket=_R2_BUCKET, Prefix=prefix):
@@ -219,8 +221,6 @@ def _sync_context_from_r2(namespace, cache_root):
 def _sync_context_to_r2(namespace, cache_root):
     """Mirror the completed chain cache to private R2, removing stale segments."""
     client = _r2_client()
-    if client is None:
-        return False
     prefix = _r2_context_prefix(namespace)
     local = {
         path.relative_to(cache_root).as_posix(): path
@@ -368,6 +368,10 @@ def _volume_chain_video(namespace, workspace=None):
     """
     digest = _namespace_digest(namespace)
     directory = _CACHE_BASE_ROOT / digest[:2] / digest
+    # Fetch and merge jobs can land on a different network volume from the
+    # renderer. Restore R2 first so every cache read uses the same authoritative
+    # motion context, never whichever local volume happened to receive the job.
+    _sync_context_from_r2(namespace, directory)
     final_dir = directory / "chain_extender_1.final.video"
     if not final_dir.is_dir():
         return None
