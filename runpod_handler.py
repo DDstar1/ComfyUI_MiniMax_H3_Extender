@@ -32,6 +32,10 @@ _COMFY_OUTPUT_ROOT = Path(
 ).expanduser().resolve()
 _JOB_LOCK = threading.Lock()
 _original_get_history = base.get_history
+_R2_BUCKET = os.environ.get("CLOUDFLARE_R2_BUCKET", "clipweave-cloudflare-r2-bucket").strip()
+_R2_PREFIX = "motion-context/v1"
+_r2_client_instance = None
+_r2_client_lock = threading.Lock()
 
 
 def _comfy_process_args():
@@ -146,6 +150,93 @@ def _namespace_digest(namespace):
     if len(namespace) > 512:
         raise ValueError("'cache_namespace' must be 512 characters or fewer")
     return hashlib.sha256(namespace.encode("utf-8")).hexdigest()
+
+
+def _r2_client():
+    """Create the private R2 S3 client only when all worker credentials exist."""
+    global _r2_client_instance
+    endpoint = os.environ.get("CLOUDFLARE_S3_API_ENDPOINT", "").strip()
+    access_key = os.environ.get("CLOUDFLARE_ACCESS_KEY_ID", "").strip()
+    secret_key = os.environ.get("CLOUDFLARE_SECRET_ACCESS_KEY", "").strip()
+    if not endpoint or not access_key or not secret_key or not _R2_BUCKET:
+        return None
+    with _r2_client_lock:
+        if _r2_client_instance is None:
+            import boto3
+            from botocore.config import Config
+
+            _r2_client_instance = boto3.client(
+                "s3",
+                endpoint_url=endpoint,
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_key,
+                region_name="auto",
+                config=Config(signature_version="s3v4", retries={"max_attempts": 3, "mode": "standard"}),
+            )
+    return _r2_client_instance
+
+
+def _r2_context_prefix(namespace):
+    return f"{_R2_PREFIX}/{_namespace_digest(namespace)}/"
+
+
+def _r2_relative_path(key, prefix):
+    relative = key.removeprefix(prefix)
+    path = Path(relative)
+    if not relative or path.is_absolute() or ".." in path.parts:
+        raise ValueError("R2 motion-context key is invalid")
+    return path
+
+
+def _sync_context_from_r2(namespace, cache_root):
+    """Materialize the authoritative chain cache before a render starts."""
+    client = _r2_client()
+    if client is None:
+        return False
+    prefix = _r2_context_prefix(namespace)
+    objects = []
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=_R2_BUCKET, Prefix=prefix):
+        objects.extend(page.get("Contents", []))
+    if not objects:
+        return False
+    shutil.rmtree(cache_root, ignore_errors=True)
+    cache_root.mkdir(parents=True, exist_ok=True)
+    for entry in objects:
+        key = str(entry.get("Key", ""))
+        destination = cache_root / _r2_relative_path(key, prefix)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(f".{destination.name}.{os.getpid()}.r2-download")
+        try:
+            with temporary.open("wb") as handle:
+                client.download_fileobj(_R2_BUCKET, key, handle)
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+    print(f"[ClipWeave] Restored motion context from R2 ({len(objects)} objects).", flush=True)
+    return True
+
+
+def _sync_context_to_r2(namespace, cache_root):
+    """Mirror the completed chain cache to private R2, removing stale segments."""
+    client = _r2_client()
+    if client is None:
+        return False
+    prefix = _r2_context_prefix(namespace)
+    local = {
+        path.relative_to(cache_root).as_posix(): path
+        for path in cache_root.rglob("*")
+        if path.is_file() and not path.name.startswith(".")
+    }
+    remote = []
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=_R2_BUCKET, Prefix=prefix):
+        remote.extend(str(entry.get("Key", "")) for entry in page.get("Contents", []))
+    for relative, path in local.items():
+        client.upload_file(str(path), _R2_BUCKET, f"{prefix}{relative}")
+    stale = [key for key in remote if key.removeprefix(prefix) not in local]
+    for start in range(0, len(stale), 1000):
+        client.delete_objects(Bucket=_R2_BUCKET, Delete={"Objects": [{"Key": key} for key in stale[start:start + 1000]], "Quiet": True})
+    print(f"[ClipWeave] Synced motion context to R2 ({len(local)} objects).", flush=True)
+    return True
 
 
 def _ffprobe_duration(path):
@@ -482,6 +573,11 @@ def _select_project_cache(job):
     digest = hashlib.sha256(namespace.encode("utf-8")).hexdigest()
     cache_root = _CACHE_BASE_ROOT / digest[:2] / digest
     cache_root.mkdir(parents=True, exist_ok=True)
+    try:
+        _sync_context_from_r2(namespace, cache_root)
+    except Exception as error:
+        raise RuntimeError(f"Could not restore motion context from R2: {error}") from error
+    cache_root.mkdir(parents=True, exist_ok=True)
     _CACHE_ROOT_FILE.parent.mkdir(parents=True, exist_ok=True)
     temporary = _CACHE_ROOT_FILE.with_name(
         f"{_CACHE_ROOT_FILE.name}.{os.getpid()}.{threading.get_ident()}.tmp"
@@ -676,7 +772,7 @@ def handler(job):
     # worker from switching each other's cache root.
     with _JOB_LOCK:
         try:
-            _select_project_cache(job)
+            cache_root = _select_project_cache(job)
             if not base.check_server(
                 f"http://{base.COMFY_HOST}/",
                 base.COMFY_API_AVAILABLE_MAX_RETRIES,
@@ -689,9 +785,13 @@ def handler(job):
                     )
                 }
             _prepare_voice_references(job_input)
-        except (OSError, ValueError) as error:
+        except (OSError, RuntimeError, ValueError) as error:
             return {"error": str(error)}
         result = base.handler(job)
+        try:
+            _sync_context_to_r2(job_input.get("cache_namespace"), cache_root)
+        except Exception as error:
+            return {"error": f"Could not persist motion context to R2: {error}"}
     elapsed_seconds = round(time.monotonic() - started_at, 3)
     print(
         f"[ClipWeave] Render finished in {elapsed_seconds}s; "
