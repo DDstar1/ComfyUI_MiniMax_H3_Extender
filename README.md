@@ -1,5 +1,36 @@
 # ComfyUI MiniMax H3 Extender
 
+## Current ClipWeave worker behavior — 2026-09-23
+
+The RunPod worker now requires private Cloudflare R2 motion-context storage.
+Before a render it restores the chain's cache under the hashed
+`cache_namespace`; after a successful ComfyUI job it uploads the updated cache
+and removes stale remote segments before reporting success. A missing R2
+configuration or failed upload is an error, rather than a silent fallback to a
+network-volume-only cache. The local network volume still holds the H3 model
+weights and working files. When ComfyUI produces an audio-bearing video, the
+handler replaces the video-only chain segment with that muxed output and checks
+the copied segment's audio stream. It also reports worker and
+timing metadata. See [RUNPOD_SERVERLESS.md](RUNPOD_SERVERLESS.md) for required
+worker environment variables and the distinction between motion context and
+customer-facing video delivery.
+
+ClipWeave currently uses a temporary 0.08 MP, 10-step Draft render profile and
+persists selectable full-story runs in its separate frontend repository.
+Vast.ai serverless has only been researched as a possible second provider:
+marketplace offers are not deployed workers, and this repository does not yet
+include a Vast serverless wrapper or template. The RunPod image remains the
+implemented worker deployment path.
+
+## Latest documentation checkpoint — 2026-09-16
+
+The latest ClipWeave Studio Duration/Render layout refinement is frontend-only:
+it does not change the worker request contract, cache namespace, H3 workflow,
+or endpoint configuration. The application continues to provide one fixed
+quality/frame geometry per project, chain-scoped cache input, durable job
+recovery, private Supabase media storage and CPU FFmpeg final exports.
+
+
 ## ClipWeave application integration — 2026-09-13
 
 ClipWeave sends normal H3 workflow requests with a trusted, chain-scoped

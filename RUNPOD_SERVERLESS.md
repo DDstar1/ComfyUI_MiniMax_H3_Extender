@@ -1,5 +1,35 @@
 # RunPod Serverless deployment
 
+## Motion context and video delivery — 2026-09-23
+
+The current handler requires private Cloudflare R2 storage for chain motion
+context. Configure the RunPod endpoint template with server-side
+`CLOUDFLARE_S3_API_ENDPOINT`, `CLOUDFLARE_ACCESS_KEY_ID`,
+`CLOUDFLARE_SECRET_ACCESS_KEY`, and `CLOUDFLARE_R2_BUCKET` (the code's current
+bucket default is `clipweave-cloudflare-r2-bucket`, but set it explicitly for a
+deployment). The account ID and Cloudflare API token are not used by this S3
+client. Never expose the access keys through `NEXT_PUBLIC_` variables or the
+bucket's public URL.
+
+The handler maps each trusted `cache_namespace` to
+`motion-context/v1/<sha256-namespace>/` in R2. It downloads that prefix to the
+worker's local cache before rendering and mirrors the updated cache back after
+the job, deleting remote objects no longer present locally. The cache contains
+the chain's numbered clip segments, manifest, and motion data. A later clip can
+reuse an earlier validated prefix without rerendering clip 1, provided the
+required cache is intact. Changing render geometry/profile can require an
+explicit regeneration from an appropriate prefix; validated segments are never
+silently rerendered just because the local cache is missing.
+
+The cache's MP4 segments are working continuity artifacts. The handler also
+syncs the muxed audio output into the chain cache and delivers the finished
+clip to the application's private Supabase media storage for playback. A
+single-clip chain has its own video; it does not need a multi-clip merge. The
+model weights remain on the RunPod Network Volume, so R2 continuity storage
+does not remove the volume requirement for the current image. The endpoint
+digest and measured rates below are historical snapshots; inspect the live
+template before a rollout.
+
 ## Cost provenance work — 2026-09-13
 
 The worker is being extended to return non-secret hardware metadata with each completed job: GPU model, VRAM, worker identifier and data centre when available. ClipWeave records that alongside RunPod's `executionTime`. This establishes which hardware served a render, but it is not by itself a billing invoice: RunPod's normal job-status payload does not provide an authoritative hourly charge. The application must snapshot the endpoint's configured hourly rate at submission and calculate `executionTimeMs / 3,600,000 × capturedRate`.
@@ -204,8 +234,8 @@ For these multi-minute renders, use `/run`, store the returned job ID, and poll 
 status URL. Configure the Next.js server with:
 
 ```dotenv
-RUNPOD_ENDPOINT_API_KEY=YOUR_RUNPOD_API_KEY
-RUNPOD_ENDPOINT_ID=nqpfrj6twlaz5h
+RUNPOD_MINIMAX_ENDPOINT_API_KEY=YOUR_RUNPOD_API_KEY
+RUNPOD_MINIMAX_ENDPOINT_ID=nqpfrj6twlaz5h
 ```
 
 Never prefix the API key with `NEXT_PUBLIC_`. Derive `cache_namespace` on the server
