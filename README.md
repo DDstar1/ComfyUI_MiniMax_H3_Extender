@@ -17,10 +17,37 @@ customer-facing video delivery.
 
 ClipWeave currently uses a temporary 0.08 MP, 10-step Draft render profile and
 persists selectable full-story runs in its separate frontend repository.
-Vast.ai serverless has only been researched as a possible second provider:
-marketplace offers are not deployed workers, and this repository does not yet
-include a Vast serverless wrapper or template. The RunPod image remains the
-implemented worker deployment path.
+Vast.ai now has a separate serverless image and PyWorker adapter in
+`Dockerfile.vast`, `vast_handler.py`, and `vast_provision_models.py`. This does
+not change the RunPod image or the application's active RunPod submission path.
+The Vast endpoint is provisioned with zero workers while the image, R2 secrets,
+and long-running request delivery are validated. Marketplace offers are not
+deployed workers; the Vast image is not yet carrying customer renders.
+
+## Vast.ai serverless preparation
+
+GitHub Actions publishes `ghcr.io/ddstar1/comfyui_minimax_h3_extender:vast-latest`
+from `Dockerfile.vast`. Vast endpoint `clipweave-minimax-h3` (ID `38350`)
+has workergroup `48221` and private template `740056`. The endpoint has
+`min_load=0`, `cold_workers=0`, and no active workers, so it is currently a
+non-billable deployment scaffold. The workergroup targets one GPU with at least
+23 GB VRAM and 120 GB disk.
+
+The image carries code, not model weights. On first boot, the Vast startup
+script downloads the five MiniMax H3 files used by ClipWeave (about 56 GB)
+from `Comfy-Org/MiniMax-H3` to the worker's local disk. A surviving cold worker
+reuses them. The Vast adapter accepts `/generate/sync`, passes `input` to the
+same render handler used by RunPod, and therefore preserves R2 motion-cache
+restore/upload and signed video delivery. It needs the worker environment
+variables `CLOUDFLARE_S3_API_ENDPOINT`, `CLOUDFLARE_ACCESS_KEY_ID`,
+`CLOUDFLARE_SECRET_ACCESS_KEY`, `CLOUDFLARE_R2_BUCKET`, and optionally
+`HF_TOKEN`. Configure secrets in Vast account environment variables, not in
+the public image or repository.
+
+Vast's synchronous request stays open for the full render, unlike RunPod's
+submit-and-poll API. The ClipWeave frontend still submits to RunPod until a
+durable Vast request dispatcher and end-to-end test are in place. Do not switch
+production traffic by only replacing the endpoint URL.
 
 ## Latest documentation checkpoint — 2026-09-16
 
