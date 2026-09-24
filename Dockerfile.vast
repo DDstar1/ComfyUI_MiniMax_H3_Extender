@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1
+FROM runpod/worker-comfyui:5.10.0-base
+
+COPY . /comfyui/custom_nodes/ComfyUI_MiniMax_H3_Extender
+RUN mv /handler.py /runpod_base_handler.py
+COPY runpod_handler.py /clipweave_runpod_handler.py
+COPY vast_handler.py /handler.py
+COPY vast_provision_models.py /vast_provision_models.py
+COPY vast-start.sh /vast-start.sh
+RUN chmod 755 /vast-start.sh
+
+COPY extra_model_paths.runpod-volume.yaml /tmp/extra_model_paths.clipweave.yaml
+RUN printf '\n' >> /comfyui/extra_model_paths.yaml \
+    && cat /tmp/extra_model_paths.clipweave.yaml >> /comfyui/extra_model_paths.yaml \
+    && rm /tmp/extra_model_paths.clipweave.yaml
+
+RUN uv pip install --no-cache -r /comfyui/custom_nodes/ComfyUI_MiniMax_H3_Extender/requirements.txt \
+    && uv pip install --no-cache vastai==1.8.0 boto3 huggingface_hub \
+    && cd /comfyui \
+    && timeout 300 python main.py --quick-test-for-ci --cpu
+
+# Vast containers use their own persistent disk; the R2 sync in the shared
+# handler makes motion context available to replacement workers.
+ENV H3_CACHE_ROOT=/workspace/comfytr-cache
+ENV H3_CACHE_ROOT_FILE=/tmp/comfytr-h3-cache-root
+ENV PYTHONPATH=/
+CMD ["bash", "/vast-start.sh"]
