@@ -36,6 +36,92 @@ _R2_BUCKET = os.environ.get("CLOUDFLARE_R2_BUCKET", "clipweave-cloudflare-r2-buc
 _R2_PREFIX = "motion-context/v1"
 _r2_client_instance = None
 _r2_client_lock = threading.Lock()
+_SAMPLER_NODE = "MiniMaxH3Extender"
+_DECODE_NODE = "MiniMaxH3MotionContextDiskFinalDecode"
+_active_progress = None
+
+
+class _ProgressReporter:
+    """Post render stages and sampling steps to the application's progress URL.
+
+    Best effort: a failed post never affects the render. One background thread
+    sends only the newest state, so a slow callback cannot stall the websocket
+    loop that waits for ComfyUI.
+    """
+
+    def __init__(self, delivery, workflow):
+        self.delivery = delivery if isinstance(delivery, dict) else {}
+        url = str(self.delivery.get("progress_url") or "")
+        self.url = url if url.startswith("https://") else None
+        self.nodes = {
+            str(node_id): node.get("class_type")
+            for node_id, node in (workflow or {}).items() if isinstance(node, dict)
+        }
+        self.state = None
+        self.sent = None
+        self.closed = False
+        self.wake = threading.Event()
+        if self.url:
+            threading.Thread(target=self._send_loop, daemon=True).start()
+
+    def update(self, stage, step=None, total=None):
+        state = {"stage": stage}
+        if isinstance(step, (int, float)) and isinstance(total, (int, float)) and total > 0:
+            state.update(step=int(step), total=int(total))
+        if self.url and state != self.state:
+            self.state = state
+            self.wake.set()
+
+    def observe(self, raw):
+        try:
+            message = json.loads(raw)
+        except (TypeError, ValueError):
+            return
+        data = message.get("data") or {}
+        node_class = self.nodes.get(str(data.get("node")))
+        if message.get("type") == "progress" and node_class == _SAMPLER_NODE:
+            self.update("sampling", data.get("value"), data.get("max"))
+        elif message.get("type") == "executing" and node_class == _DECODE_NODE:
+            self.update("finishing")
+        elif message.get("type") == "executing" and node_class and self.state == {"stage": "starting"}:
+            self.update("loading")
+
+    def close(self):
+        self.closed = True
+        self.wake.set()
+
+    def _send_loop(self):
+        while True:
+            self.wake.wait()
+            self.wake.clear()
+            state = self.state
+            if state and state != self.sent:
+                try:
+                    requests.post(self.url, json={
+                        "jobId": self.delivery.get("job_id"), "path": self.delivery.get("storage_path"),
+                        "expiresAt": self.delivery.get("expires_at"), "token": self.delivery.get("token"),
+                        **state,
+                    }, timeout=10).raise_for_status()
+                    self.sent = state
+                except requests.RequestException as error:
+                    print(f"[ClipWeave] Progress update failed: {error}", flush=True)
+            if self.closed:
+                return
+
+
+class _ObservedWebSocket(base.websocket.WebSocket):
+    """The base handler ignores ComfyUI's progress messages; report them."""
+
+    def recv(self, *args, **kwargs):
+        message = super().recv(*args, **kwargs)
+        reporter = _active_progress
+        if reporter is not None and isinstance(message, str):
+            reporter.observe(message)
+        return message
+
+
+# The base handler creates its websocket (and any reconnect) through this name.
+base.websocket.WebSocket = _ObservedWebSocket
 
 
 def _comfy_process_args():
@@ -780,68 +866,82 @@ def handler(job):
     # how the already-running ComfyUI process learns this job's cache directory.
     # Serializing the selection and execution prevents concurrent jobs in one
     # worker from switching each other's cache root.
+    global _active_progress
+    reporter = _ProgressReporter(job_input.get("delivery"), job_input.get("workflow"))
+    reporter.update("starting")
     with _JOB_LOCK:
+        _active_progress = reporter
         try:
-            cache_root = _select_project_cache(job)
-            if not base.check_server(
-                f"http://{base.COMFY_HOST}/",
-                base.COMFY_API_AVAILABLE_MAX_RETRIES,
-                base.COMFY_API_AVAILABLE_INTERVAL_MS,
-            ):
-                return {
-                    "error": (
-                        f"ComfyUI server ({base.COMFY_HOST}) was not reachable "
-                        "while preparing voice references."
-                    )
-                }
-            _prepare_voice_references(job_input)
+            return _render_with_progress(job, job_input, reporter, rate_value, started_at, queue_and_cold_boot_ms)
+        finally:
+            _active_progress = None
+            reporter.close()
+
+
+def _render_with_progress(job, job_input, reporter, rate_value, started_at, queue_and_cold_boot_ms):
+    """Render one job while the websocket observer reports its progress."""
+    try:
+        cache_root = _select_project_cache(job)
+        if not base.check_server(
+            f"http://{base.COMFY_HOST}/",
+            base.COMFY_API_AVAILABLE_MAX_RETRIES,
+            base.COMFY_API_AVAILABLE_INTERVAL_MS,
+        ):
+            return {
+                "error": (
+                    f"ComfyUI server ({base.COMFY_HOST}) was not reachable "
+                    "while preparing voice references."
+                )
+            }
+        _prepare_voice_references(job_input)
+    except (OSError, RuntimeError, ValueError) as error:
+        return {"error": str(error)}
+    result = base.handler(job)
+    reporter.update("saving")
+    elapsed_seconds = round(time.monotonic() - started_at, 3)
+    print(
+        f"[ClipWeave] Render finished in {elapsed_seconds}s; "
+        f"runtime={_runtime_metadata(rate_value)}",
+        flush=True,
+    )
+    if not isinstance(result, dict) or "images" not in result:
+        return result
+
+    images = []
+    videos = []
+    for artifact in result.get("images", []):
+        extension = os.path.splitext(str(artifact.get("filename", "")))[1].lower()
+        (videos if extension in _VIDEO_EXTENSIONS else images).append(artifact)
+
+    result["images"] = images
+    output_video = _output_artifact_path(videos[-1]) if videos else None
+    if videos:
+        try:
+            synced = _sync_audio_output_to_chain(job_input.get("cache_namespace"), output_video)
+            if synced:
+                output_video = synced
+                print("[ClipWeave] Synced muxed audio into the chain cache.", flush=True)
         except (OSError, RuntimeError, ValueError) as error:
-            return {"error": str(error)}
-        result = base.handler(job)
-        elapsed_seconds = round(time.monotonic() - started_at, 3)
-        print(
-            f"[ClipWeave] Render finished in {elapsed_seconds}s; "
-            f"runtime={_runtime_metadata(rate_value)}",
-            flush=True,
-        )
-        if not isinstance(result, dict) or "images" not in result:
-            return result
-
-        images = []
-        videos = []
-        for artifact in result.get("images", []):
-            extension = os.path.splitext(str(artifact.get("filename", "")))[1].lower()
-            (videos if extension in _VIDEO_EXTENSIONS else images).append(artifact)
-
-        result["images"] = images
-        output_video = _output_artifact_path(videos[-1]) if videos else None
-        if videos:
-            try:
-                synced = _sync_audio_output_to_chain(job_input.get("cache_namespace"), output_video)
-                if synced:
-                    output_video = synced
-                    print("[ClipWeave] Synced muxed audio into the chain cache.", flush=True)
-            except (OSError, RuntimeError, ValueError) as error:
-                print(f"[ClipWeave] Could not sync audio to the chain cache: {error}", flush=True)
-        try:
-            _sync_context_to_r2(job_input.get("cache_namespace"), cache_root)
-        except Exception as error:
-            return {"error": f"Could not persist motion context to R2: {error}"}
-        if not videos:
-            return result
-        try:
-            if _deliver_video(job_input.get("delivery"), job_input.get("cache_namespace"), elapsed_seconds * 1000, queue_and_cold_boot_ms, output_video):
-                print("[ClipWeave] Video delivered to Supabase.", flush=True)
-                return {"images": [], "videos": [], "delivered": True,
-                        "worker_metadata": _worker_metadata(rate_value)}
-        except (OSError, ValueError, requests.RequestException) as error:
-            # Return the volume key as the durable fallback. The application
-            # can still ingest it when a delivery URL has expired or is down.
-            print(f"[ClipWeave] Direct video delivery failed: {error}", flush=True)
-        try:
-            return _volume_video_result(job_input.get("cache_namespace"), rate_value)
-        except (OSError, ValueError) as error:
-            return {"error": str(error)}
+            print(f"[ClipWeave] Could not sync audio to the chain cache: {error}", flush=True)
+    try:
+        _sync_context_to_r2(job_input.get("cache_namespace"), cache_root)
+    except Exception as error:
+        return {"error": f"Could not persist motion context to R2: {error}"}
+    if not videos:
+        return result
+    try:
+        if _deliver_video(job_input.get("delivery"), job_input.get("cache_namespace"), elapsed_seconds * 1000, queue_and_cold_boot_ms, output_video):
+            print("[ClipWeave] Video delivered to Supabase.", flush=True)
+            return {"images": [], "videos": [], "delivered": True,
+                    "worker_metadata": _worker_metadata(rate_value)}
+    except (OSError, ValueError, requests.RequestException) as error:
+        # Return the volume key as the durable fallback. The application
+        # can still ingest it when a delivery URL has expired or is down.
+        print(f"[ClipWeave] Direct video delivery failed: {error}", flush=True)
+    try:
+        return _volume_video_result(job_input.get("cache_namespace"), rate_value)
+    except (OSError, ValueError) as error:
+        return {"error": str(error)}
 
 
 if __name__ == "__main__":
