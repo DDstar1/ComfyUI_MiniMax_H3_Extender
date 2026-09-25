@@ -1,5 +1,40 @@
 # ComfyUI MiniMax H3 Extender
 
+## Current state — 2026-09-25 (production on Vast)
+
+ClipWeave production renders on the **Vast** image built from this repository
+(`Dockerfile.vast`, published by the "Build Vast serverless image" workflow as
+`ghcr.io/ddstar1/comfyui_minimax_h3_extender:vast-<short sha>`). The template
+currently runs **`vast-7adc0eb`**. The RunPod image (`Dockerfile`) is still
+built on every push but no longer receives customer renders. The operational
+runbook, including endpoint settings, worker filters and how to change the
+image, is in the frontend repository:
+[`docs/VAST_OPERATIONS.md`](https://github.com/DDstar1/Comfy__Video_Creator/blob/main/docs/VAST_OPERATIONS.md).
+
+Endpoint `38350` now allows **3 workers** and keeps **1 cold worker** (a stopped
+instance that keeps its image and models on disk). The frontend parks it at
+`max_workers=0` after two idle hours and unparks it on the next render; the
+earlier note below about leaving it parked is out of date.
+
+Worker changes on 2026-09-25:
+
+- `5e64795`: the Vast adapter (`vast_handler.py`) passes a job id to RunPod's
+  base handler, which reads `job["id"]`; every Vast render failed without it.
+- `7adc0eb`: **render progress.** `runpod_handler.py` wraps the base handler's
+  websocket (`_ObservedWebSocket`) to see ComfyUI's `progress` and `executing`
+  messages, which the base handler ignores, and `_ProgressReporter` posts the
+  stage (`starting`, `loading`, `sampling` with step and total, `finishing`,
+  `saving`) to the job's `delivery.progress_url`. Only the newest state is
+  sent, from a background thread, so a slow callback never delays the render;
+  jobs without a progress URL are unaffected. Sampling progress is taken only
+  from the `MiniMaxH3Extender` node; `finishing` starts when
+  `MiniMaxH3MotionContextDiskFinalDecode` executes.
+
+Measured on RTX 3090 / RTX PRO 4000 (24 GB) at the 0.08 MP, 10-step Draft
+profile: a 10 s clip samples in about 2 minutes (about 11.6 s per step on the
+3090) and peaks at 21 to 23.5 GB of VRAM. Standard and High have not been
+tested on 24 GB.
+
 ## Vast test handoff — 2026-09-25 (first successful render)
 
 **A real ClipWeave render completed end to end on Vast.** Job
@@ -58,9 +93,9 @@ changed and still renders on RunPod. The test spent about $0.67 of Vast credit
   wait, or a queued submission.
 - After the test worker was destroyed, the autoscaler kept starting
   replacements (`52557782`, then `52558116`) even with `min_load=0` and
-  `cold_workers=0`. Endpoint `38350` is therefore **parked at
-  `max_workers=0`**; set it back (e.g. to 3) before the next test. Verify no
-  instance remains after any test.
+  `cold_workers=0`. The endpoint was parked at `max_workers=0` at the time;
+  it has since been set to 3 workers with 1 cold worker (see the current state
+  above).
 - Jobs carry `worker_rate_usd_per_second` from the RunPod setting
   ($0.684/hour), not the Vast host's rate; the Vast completion path does not
   store worker timing metadata; and `VAST_GPU_COST_CENTS_PER_HOUR` is unset, so
