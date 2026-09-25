@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import threading
 import time
+import uuid
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -65,12 +66,13 @@ def _render_in_background(job_input, session):
     delivery = job_input.get("delivery")
     job_id = delivery.get("job_id")
     try:
-        result = render_handler({"input": job_input})
+        # RunPod's base handler reads job["id"], which RunPod always supplies.
+        result = render_handler({"id": job_id, "input": job_input})
         if not isinstance(result, dict) or result.get("error") or not result.get("delivered"):
             # A completed render may have missed its delivery callback. The
             # shared handler can retry delivery from the chain's local cache.
             if isinstance(result, dict) and not result.get("error"):
-                result = render_handler({"input": {
+                result = render_handler({"id": job_id, "input": {
                     "fetch": {"cache_namespace": job_input.get("cache_namespace")},
                     "delivery": delivery,
                 }})
@@ -124,7 +126,7 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                 time.sleep(2)
                 result = {"benchmark": True}
             else:
-                result = render_handler({"input": payload["input"]})
+                result = render_handler({"id": f"vast-sync-{uuid.uuid4()}", "input": payload["input"]})
             self._respond(200, result)
         except (ValueError, json.JSONDecodeError) as error:
             self._respond(400, {"error": str(error)})

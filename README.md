@@ -1,5 +1,81 @@
 # ComfyUI MiniMax H3 Extender
 
+## Vast test handoff — 2026-09-25 (first successful render)
+
+**A real ClipWeave render completed end to end on Vast.** Job
+`3e6a0b7a-063e-4688-a296-b8bb304c920f` (throwaway project "Vast test - delete
+after") ran on an RTX PRO 4000 Blackwell 24 GB at $0.246/hour all-in:
+111 s execution for a 10 s Draft clip, 21.6 GB VRAM in use at 75% GPU. The
+result is a 10.13 s, 384x224, 24 fps H.264 MP4 with a stereo AAC track, stored
+in private R2 (`r2:videos/...`), attached to its clip through
+`/api/renders/complete`, with 4 motion-context objects synced to R2. It was
+submitted from a local Next.js server with `CLIPWEAVE_RENDER_PROVIDER=vast` and
+`RENDER_CALLBACK_ORIGIN` pointing at an ngrok tunnel; production Vercel was not
+changed and still renders on RunPod. The test spent about $0.67 of Vast credit
+(including two instances destroyed during setup).
+
+**Live configuration after the test** (recheck before acting):
+
+- Template `740056`, image `ghcr.io/ddstar1/comfyui_minimax_h3_extender:vast-0188b06`,
+  onstart `bash /vast-start.sh`, 100 GB disk, Docker options
+  `-p 3000:3000 -e WORKER_PORT=3000`. Editing a template changes its
+  `hash_id`; re-point the workergroup's `template_hash` afterwards.
+- Workergroup `48221`: `gpu_ram>=24`, `compute_cap>=800` (Ampere or newer),
+  `cuda_max_good>=12.8`, `reliability>=0.98`, `disk_space>=100`,
+  `inet_down>200`, `dph<=0.25`, `storage_cost<=0.35`, `inet_down_cost<=0.004`.
+  Vast's `dph` filter checks the GPU price only; 100 GB disk is added on top,
+  so the GPU and storage caps together keep the total at or below the
+  user's **$0.30/hour** limit (worst case about $0.298). A `dph<=0.30` filter
+  alone admitted a $0.332/hour worker.
+- R2 credentials are Vast **account** environment variables and do reach
+  serverless containers (verified by listing variable names in a worker).
+
+**Bugs found and fixed during the test:**
+
+1. The PyWorker crashed with `KeyError: 'WORKER_PORT'`. The vastai library
+   needs `WORKER_PORT` plus a mapped port (`VAST_TCP_PORT_<port>`); the handler
+   already assumed `WORKER_HTTP_PORT=3001`, i.e. `WORKER_PORT=3000`. Fixed in
+   the template's Docker options above.
+2. Every render failed with `KeyError: 'id'`: RunPod's base handler reads
+   `job["id"]`, which RunPod supplies and the Vast adapter did not. Fixed in
+   `vast_handler.py` by passing an id. **The published `vast-0188b06` image
+   still has this bug**; the successful render used a hot-patched worker. Push
+   the fix, let CI publish a new `vast-<sha>` image, and point template
+   `740056` at it before relying on Vast again.
+
+**Other findings:**
+
+- The image never writes `/tmp/clipweave-vast-model.log` before models finish;
+  follow `[ClipWeave] Downloading model:` lines in the container log instead
+  (Vast API `PUT /api/v0/instances/request_logs/{id}/`, trailing slash
+  required). `GET /api/v0/instances/` is deprecated; use `/api/v1/instances/`.
+- Cold start on a fresh host downloads ~56 GB of models: about 8 minutes at
+  121 MiB/s on one host and about 18 minutes at 51 MiB/s on another.
+- The app's Vast submit waits only 180 s for a routed worker, so a cold
+  endpoint always fails the first submission ("No Vast worker became ready in
+  time") while the host provisions; the job is marked failed and its
+  reservation released correctly. Production needs a warm worker, a longer
+  wait, or a queued submission.
+- After the test worker was destroyed, the autoscaler kept starting
+  replacements (`52557782`, then `52558116`) even with `min_load=0` and
+  `cold_workers=0`. Endpoint `38350` is therefore **parked at
+  `max_workers=0`**; set it back (e.g. to 3) before the next test. Verify no
+  instance remains after any test.
+- Jobs carry `worker_rate_usd_per_second` from the RunPod setting
+  ($0.684/hour), not the Vast host's rate; the Vast completion path does not
+  store worker timing metadata; and `VAST_GPU_COST_CENTS_PER_HOUR` is unset, so
+  Vast cost estimates are empty in `/admin`.
+- The Draft frame showed some blocky red patches, probably from the temporary
+  0.08 MP, 10-step profile rather than from Vast.
+
+Earlier attempt history, all instances destroyed: RTX 4080 Super `52534870`
+stalled on the image pull; V100s `52538167`/`52538258` and RTX 3090
+`52538434` were ended early; RTX 3090 `52538605` failed with CUDA error 804
+(host driver `565.57.01` vs PyTorch `2.11.0+cu128`), which is why
+`cuda_max_good>=12.8` is required (`driver_version>=570` gave HTTP 400).
+RTX PRO 4000 `52552220` hit the `WORKER_PORT` crash and `52554453` was
+destroyed for exceeding the price cap.
+
 ## Current ClipWeave worker behavior — 2026-09-23
 
 The RunPod worker now requires private Cloudflare R2 motion-context storage.
