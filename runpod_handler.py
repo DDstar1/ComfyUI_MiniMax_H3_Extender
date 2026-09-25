@@ -765,10 +765,13 @@ def handler(job):
             # as a normal render, so a browser does not need to poll a second
             # time before the recovered video appears in ClipWeave.
             if "error" not in result and job_input.get("delivery"):
-                _deliver_video(
+                delivered = _deliver_video(
                     job_input["delivery"],
                     job_input["fetch"].get("cache_namespace"),
                 )
+                if delivered:
+                    return {"images": [], "videos": [], "delivered": True,
+                            "worker_metadata": _worker_metadata(rate_value)}
             return result
         except (OSError, RuntimeError, ValueError, requests.RequestException) as error:
             return {"error": str(error)}
