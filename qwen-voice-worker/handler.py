@@ -36,4 +36,6 @@ def handler(job):
     finally:
         path.unlink(missing_ok=True)
 
-runpod.serverless.start({'handler': handler})
+# The Vast adapter imports this module, so only start RunPod when run directly.
+if __name__ == '__main__':
+    runpod.serverless.start({'handler': handler})

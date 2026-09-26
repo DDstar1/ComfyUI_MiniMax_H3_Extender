@@ -1,0 +1,14 @@
+FROM runpod/worker-comfyui:5.10.0-base
+
+# Same Qwen packages as the RunPod image (Dockerfile), plus Vast's PyWorker.
+RUN git clone --depth 1 https://github.com/DarioFT/ComfyUI-Qwen3-TTS.git /comfyui/custom_nodes/ComfyUI-Qwen3-TTS \
+    && uv pip install --no-cache -r /comfyui/custom_nodes/ComfyUI-Qwen3-TTS/requirements.txt \
+    && uv pip install --no-cache vastai==1.8.0
+COPY handler.py /handler.py
+COPY vast_handler.py /vast_handler.py
+ENV QWEN_MODEL_ID=Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+# Keep downloaded weights on the Vast worker's disk so a resumed worker
+# does not download them again.
+ENV HF_HOME=/workspace/huggingface
+ENV PYTHONPATH=/
+CMD ["python", "-u", "/vast_handler.py"]
