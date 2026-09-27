@@ -1,11 +1,30 @@
 # ComfyUI MiniMax H3 Extender
 
+## Changes on 2026-09-26 and 2026-09-27
+
+- **The Vast template runs `vast-8a04ef0`** (was `vast-7adc0eb`).
+- `8a04ef0`: `vast_provision_models.py` downloads all missing models **at once**
+  with `HF_TOKEN` when set (a Vast account environment variable), then retries
+  any file that failed one at a time; partial files resume. It logs each file's
+  time and a `Models ready in Ns (N retried one by one)` summary. First fresh
+  boot: models ready in 468 s, about 9.5 minutes in total, against 17-24 minutes
+  when downloading one file at a time. No 429s.
+- `f8a02c0`: a Vast build of the Qwen voice worker (`qwen-voice-worker/Dockerfile.vast`,
+  `vast_handler.py`, workflow `qwen-voice-vast-image.yml`, tag
+  `qwen-voice-vast-<sha>`). The RunPod voice `handler.py` only starts RunPod
+  when run directly, so the Vast adapter can import it. Template `741526`
+  exists; the endpoint is not created yet (Vast needs $10 of credit).
+- The application now renders 15 steps at 0.2/0.4/0.6 MP. Measured on a 24 GB
+  RTX PRO 4000: Draft about 6 minutes, Standard about 11, High about 18 per 10 s
+  clip; peak VRAM under 19 GB (ComfyUI offloads beyond that), system RAM under
+  54 GB. An RTX 5090 rendered High in 434 s instead of 1047 s.
+
 ## Current state — 2026-09-25 (production on Vast)
 
 ClipWeave production renders on the **Vast** image built from this repository
 (`Dockerfile.vast`, published by the "Build Vast serverless image" workflow as
 `ghcr.io/ddstar1/comfyui_minimax_h3_extender:vast-<short sha>`). The template
-currently runs **`vast-7adc0eb`**. The RunPod image (`Dockerfile`) is still
+ran **`vast-7adc0eb`** on this date (now `vast-8a04ef0`; see above). The RunPod image (`Dockerfile`) is still
 built on every push but no longer receives customer renders. The operational
 runbook, including endpoint settings, worker filters and how to change the
 image, is in the frontend repository:
