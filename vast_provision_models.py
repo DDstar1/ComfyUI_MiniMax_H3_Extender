@@ -1,12 +1,23 @@
-"""Download only the MiniMax H3 weights used by ClipWeave to Vast's local disk."""
+"""Download only the MiniMax H3 weights used by ClipWeave to Vast's local disk.
 
+All missing files download at once to shorten a fresh boot. Hugging Face has
+rate-limited bursts before (HTTP 429 on the old RunPod setup), so any file that
+fails is retried one at a time afterwards. `huggingface_hub` itself waits out a
+429 using the server's RateLimit header. Set HF_TOKEN (a read-only token) as a
+Vast account environment variable for account-level rather than per-IP limits.
+"""
+
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import os
+import sys
+import time
 
 from huggingface_hub import hf_hub_download
 
 
 ROOT = Path("/runpod-volume/runpod-slim/ComfyUI/models")
+REPO = "Comfy-Org/MiniMax-H3"
 FILES = (
     "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
     "text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
@@ -14,18 +25,52 @@ FILES = (
     "vae/minimax_h3_audio_vae_fp32.safetensors",
     "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
 )
+TOKEN = os.getenv("HF_TOKEN") or None
 
 
-for filename in FILES:
-    target = ROOT / filename
-    if target.is_file() and target.stat().st_size > 0:
-        print(f"[ClipWeave] Model cached: {filename}", flush=True)
-        continue
-    target.parent.mkdir(parents=True, exist_ok=True)
+def download(filename):
+    started = time.monotonic()
     print(f"[ClipWeave] Downloading model: {filename}", flush=True)
-    hf_hub_download(
-        repo_id="Comfy-Org/MiniMax-H3",
-        filename=filename,
-        local_dir=ROOT,
-        token=os.getenv("HF_TOKEN") or None,
-    )
+    hf_hub_download(repo_id=REPO, filename=filename, local_dir=ROOT, token=TOKEN)
+    print(f"[ClipWeave] Downloaded model in {time.monotonic() - started:.0f}s: {filename}", flush=True)
+
+
+def main():
+    missing = []
+    for filename in FILES:
+        target = ROOT / filename
+        if target.is_file() and target.stat().st_size > 0:
+            print(f"[ClipWeave] Model cached: {filename}", flush=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            missing.append(filename)
+    if not missing:
+        return
+
+    started = time.monotonic()
+    print(f"[ClipWeave] Downloading {len(missing)} models at once "
+          f"({'with' if TOKEN else 'without'} HF_TOKEN)", flush=True)
+    failed = []
+    with ThreadPoolExecutor(max_workers=len(missing)) as pool:
+        futures = {pool.submit(download, filename): filename for filename in missing}
+        for future, filename in futures.items():
+            try:
+                future.result()
+            except Exception as error:  # noqa: BLE001 - every failure gets the sequential retry
+                print(f"[ClipWeave] Parallel download failed, will retry one by one: {filename}: {error}", flush=True)
+                failed.append(filename)
+
+    # hf_hub_download resumes partial files, so the retry continues where the
+    # parallel attempt stopped.
+    for filename in failed:
+        download(filename)
+    print(f"[ClipWeave] Models ready in {time.monotonic() - started:.0f}s "
+          f"({len(failed)} retried one by one)", flush=True)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:  # noqa: BLE001
+        print(f"[ClipWeave] Model download failed: {error}", file=sys.stderr, flush=True)
+        raise
