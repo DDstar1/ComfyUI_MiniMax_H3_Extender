@@ -927,7 +927,8 @@ def _render_with_progress(job, job_input, reporter, rate_value, started_at, queu
         and reporter.render_error
     ):
         result = {**result, "error": f"Job processing failed: {reporter.render_error}"}
-    reporter.update("saving")
+    if not isinstance(result, dict) or not result.get("error"):
+        reporter.update("saving")
     elapsed_seconds = round(time.monotonic() - started_at, 3)
     print(
         f"[ClipWeave] Render finished in {elapsed_seconds}s; "
