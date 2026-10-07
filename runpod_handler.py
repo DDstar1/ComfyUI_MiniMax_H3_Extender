@@ -41,6 +41,24 @@ _DECODE_NODE = "MiniMaxH3MotionContextDiskFinalDecode"
 _active_progress = None
 
 
+def _renderer_error_detail(data):
+    """Turn ComfyUI's execution_error event into a short safe callback detail."""
+    if not isinstance(data, dict):
+        return None
+    node = " ".join(str(data.get("node_type") or data.get("node_id") or "ComfyUI node").split())
+    kind = " ".join(str(data.get("exception_type") or "Render error").split())
+    message = " ".join(str(data.get("exception_message") or data.get("exception_details") or "").split())
+    if not message:
+        return f"{node}: {kind}"[:600]
+    message = re.sub(r"https?://[^\s]+", "[URL redacted]", message)
+    message = re.sub(
+        r"(?i)\b(authorization|token|api[_-]?key|secret|password)\b\s*[:=]\s*[^\s,;]+",
+        r"\1=[redacted]",
+        message,
+    )
+    return f"{node}: {kind}: {message}"[:600]
+
+
 class _ProgressReporter:
     """Post render stages and sampling steps to the application's progress URL.
 
@@ -60,6 +78,7 @@ class _ProgressReporter:
         self.state = None
         self.sent = None
         self.closed = False
+        self.render_error = None
         self.wake = threading.Event()
         if self.url:
             threading.Thread(target=self._send_loop, daemon=True).start()
@@ -79,7 +98,9 @@ class _ProgressReporter:
             return
         data = message.get("data") or {}
         node_class = self.nodes.get(str(data.get("node")))
-        if message.get("type") == "progress" and node_class == _SAMPLER_NODE:
+        if message.get("type") == "execution_error":
+            self.render_error = _renderer_error_detail(data)
+        elif message.get("type") == "progress" and node_class == _SAMPLER_NODE:
             self.update("sampling", data.get("value"), data.get("max"))
         elif message.get("type") == "executing" and node_class == _DECODE_NODE:
             self.update("finishing")
@@ -897,6 +918,15 @@ def _render_with_progress(job, job_input, reporter, rate_value, started_at, queu
     except (OSError, RuntimeError, ValueError) as error:
         return {"error": str(error)}
     result = base.handler(job)
+    # The stock handler collapses ComfyUI execution errors into the generic
+    # "Job processing failed" result. Preserve the event detail so the
+    # application can distinguish a bad workflow/input from infrastructure.
+    if (
+        isinstance(result, dict)
+        and str(result.get("error") or "").strip().lower() == "job processing failed"
+        and reporter.render_error
+    ):
+        result = {**result, "error": f"Job processing failed: {reporter.render_error}"}
     reporter.update("saving")
     elapsed_seconds = round(time.monotonic() - started_at, 3)
     print(
