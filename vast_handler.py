@@ -7,6 +7,8 @@ RunPod's /handler.py remains unchanged in its own image.
 
 import json
 import os
+import re
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import threading
@@ -27,6 +29,26 @@ LOG_FILE = Path("/tmp/clipweave-vast-model.log")
 MAX_BODY_BYTES = 32 * 1024 * 1024
 _ACTIVE_JOBS = set()
 _ACTIVE_LOCK = threading.Lock()
+_GENERIC_FAILURE_MESSAGES = {"job processing failed", "render failed", "render did not deliver a video"}
+
+
+def _failure_summary(error):
+    """Return a useful callback message without exposing signed URLs or secrets."""
+    detail = " ".join(str(error).split())
+    detail = re.sub(r"https?://[^\s]+", "[URL redacted]", detail)
+    detail = re.sub(
+        r"(?i)\b(authorization|token|api[_-]?key|secret|password)\b\s*[:=]\s*[^\s,;]+",
+        r"\1=[redacted]",
+        detail,
+    )
+    if not detail:
+        detail = "No exception detail was provided by the render worker."
+    if detail.lower() in _GENERIC_FAILURE_MESSAGES:
+        detail = (
+            f"{detail}. The renderer did not provide a lower-level diagnostic; "
+            "inspect this worker's traceback for the cause."
+        )
+    return f"{type(error).__name__}: {detail}"[:1000]
 
 
 def _finish_session(session):
@@ -65,6 +87,7 @@ def _report_failure(delivery, message):
 def _render_in_background(job_input, session):
     delivery = job_input.get("delivery")
     job_id = delivery.get("job_id")
+    stage = "rendering"
     try:
         # RunPod's base handler reads job["id"], which RunPod always supplies.
         result = render_handler({"id": job_id, "input": job_input})
@@ -72,6 +95,7 @@ def _render_in_background(job_input, session):
             # A completed render may have missed its delivery callback. The
             # shared handler can retry delivery from the chain's local cache.
             if isinstance(result, dict) and not result.get("error"):
+                stage = "recovering video delivery"
                 result = render_handler({"id": job_id, "input": {
                     "fetch": {"cache_namespace": job_input.get("cache_namespace")},
                     "delivery": delivery,
@@ -79,8 +103,10 @@ def _render_in_background(job_input, session):
             if not isinstance(result, dict) or result.get("error") or not result.get("delivered"):
                 raise RuntimeError(str(result.get("error") if isinstance(result, dict) else "Render did not deliver a video"))
     except Exception as error:
-        print(f"[ClipWeave] Vast render failed for {job_id}: {error}", flush=True)
-        _report_failure(delivery, error)
+        summary = f"{stage.capitalize()} failed: {_failure_summary(error)}"[:1000]
+        print(f"[ClipWeave] Vast render failed for {job_id}: {summary}", flush=True)
+        traceback.print_exc()
+        _report_failure(delivery, summary)
     finally:
         _finish_session(session)
         with _ACTIVE_LOCK:
