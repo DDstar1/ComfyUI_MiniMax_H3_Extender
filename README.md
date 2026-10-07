@@ -6,6 +6,7 @@
 - Signed URLs and credential-like values are redacted before a failure reaches the application.
 - If the underlying renderer supplies only a generic failure, ClipWeave identifies that fact and the worker preserves the full traceback in its logs for investigation.
 - `runpod_handler.py` now captures ComfyUI `execution_error` events and returns a redacted node, exception type, and concise message when the stock handler would otherwise return only `Job processing failed`. This is diagnostic-only: it does not retry a render, reuse a failed output, or change later jobs. Failed renders also retain their last real progress stage instead of being incorrectly marked as saving.
+- When a clip uses multiple standalone character voice references, the extender shares MiniMax H3's 15-second cumulative budget evenly across them instead of rejecting the render: 7.5 seconds each for two voices and 5 seconds each for three. MiniMax accepts at most three standalone voice references in one clip.
 
 ## Changes on 2026-09-26 and 2026-09-27
 

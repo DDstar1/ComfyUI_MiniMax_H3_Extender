@@ -1296,10 +1296,18 @@ def _prepare_standalone_audio_refs(
         prepared.append((slot, sliced, start, duration, timeline_mode, id(audio["waveform"])))
 
     if total_effective_audio > MAX_REF_AUDIO_SECONDS + 1e-6:
-        raise ValueError(
-            "MiniMax H3 Extender: the standalone audio references for this clip total "
-            f"{total_effective_audio:.3f}s, above MiniMax H3's {MAX_REF_AUDIO_SECONDS:.0f}s cumulative audio-reference limit."
-        )
+        # MiniMax applies this limit across every standalone reference. Keep each
+        # active character represented by sharing the 15-second budget evenly.
+        per_reference_limit = MAX_REF_AUDIO_SECONDS / float(len(prepared))
+        limited = []
+        for slot, sliced, start, duration, timeline_mode, source_waveform_id in prepared:
+            if _audio_duration_seconds(sliced) > per_reference_limit + 1e-6:
+                sliced = _slice_ref_audio(
+                    sliced, 0.0, per_reference_limit, f"ref_audio_{slot}", require_full=False
+                )
+                duration = min(float(duration), per_reference_limit)
+            limited.append((slot, sliced, start, duration, timeline_mode, source_waveform_id))
+        prepared = limited
 
     ref_items = []
     ref_blocks = []
