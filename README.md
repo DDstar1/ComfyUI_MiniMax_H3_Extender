@@ -15,6 +15,20 @@ provisioning downloads only the profile's diffusion model plus the common
 weights, so persistent worker disks cache the correct files after their first
 startup.
 
+## Enhanced Vast pool status — 2026-10-08
+
+The BF16-capable Vast image has been published as `vast-ac3fd67`. The private
+template `clipweave-minimax-h3-bf16` (id `756333`) is configured to start this
+image with `H3_RENDER_PROFILE=enhanced`, 150 GB disk, one 80 GB-or-larger GPU,
+and at least 96 GB system RAM. It has not started a worker.
+
+Vast requires a $15.00 balance before it will create the third serverless
+endpoint. The account was at $6.2351 during setup, so the BF16 endpoint and
+workergroup remain intentionally absent. After at least $8.7649 is added,
+create a zero-worker endpoint, attach template hash
+`5f39b7c88ab43f191572798e7e482115`, and configure the application with that
+endpoint's `VAST_BF16_ENDPOINT_ID` and `VAST_BF16_ENDPOINT_NAME`.
+
 ## Changes on 2026-10-07 — Vast failure diagnostics
 
 - The Vast adapter now reports the failed stage, exception type and concise error detail through ClipWeave's signed failure callback.
