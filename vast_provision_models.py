@@ -18,13 +18,20 @@ from huggingface_hub import hf_hub_download
 
 ROOT = Path("/runpod-volume/runpod-slim/ComfyUI/models")
 REPO = "Comfy-Org/MiniMax-H3"
-FILES = (
-    "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+COMMON_FILES = (
     "text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
     "vae/minimax_h3_video_vae_fp16.safetensors",
     "vae/minimax_h3_audio_vae_fp32.safetensors",
     "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
 )
+PROFILE_MODELS = {
+    "standard": "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+    "enhanced": "diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors",
+}
+RENDER_PROFILE = os.getenv("H3_RENDER_PROFILE", "standard").strip().lower()
+if RENDER_PROFILE not in PROFILE_MODELS:
+    raise SystemExit("H3_RENDER_PROFILE must be 'standard' or 'enhanced'.")
+FILES = (PROFILE_MODELS[RENDER_PROFILE], *COMMON_FILES)
 TOKEN = os.getenv("HF_TOKEN") or None
 
 
@@ -36,6 +43,7 @@ def download(filename):
 
 
 def main():
+    print(f"[ClipWeave] Render profile: {RENDER_PROFILE} ({PROFILE_MODELS[RENDER_PROFILE]})", flush=True)
     missing = []
     for filename in FILES:
         target = ROOT / filename

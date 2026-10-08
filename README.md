@@ -1,4 +1,19 @@
 # ComfyUI MiniMax H3 Extender
+## Motion-fidelity worker profiles — 2026-10-08
+
+One Docker image now supports two Vast worker profiles through
+H3_RENDER_PROFILE:
+
+- standard (default) downloads minimax_h3_ref2va_pruned_int8_convrot.safetensors.
+- enhanced downloads minimax_h3_ref2va_pruned_bf16.safetensors.
+
+Both keep the same INT8 Qwen3-VL text encoder and FP16/FP32 video and audio
+VAEs. Set the environment variable in each Vast template, not per job. The
+adapter validates both render_profile and the workflow's UNET before rendering,
+preventing an INT8 worker from accepting a BF16 request or the reverse. Model
+provisioning downloads only the profile's diffusion model plus the common
+weights, so persistent worker disks cache the correct files after their first
+startup.
 
 ## Changes on 2026-10-07 — Vast failure diagnostics
 

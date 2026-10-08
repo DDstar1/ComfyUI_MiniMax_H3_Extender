@@ -30,6 +30,31 @@ MAX_BODY_BYTES = 32 * 1024 * 1024
 _ACTIVE_JOBS = set()
 _ACTIVE_LOCK = threading.Lock()
 _GENERIC_FAILURE_MESSAGES = {"job processing failed", "render failed", "render did not deliver a video"}
+_PROFILE_MODELS = {
+    "standard": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+    "enhanced": "minimax_h3_ref2va_pruned_bf16.safetensors",
+}
+_RENDER_PROFILE = os.environ.get("H3_RENDER_PROFILE", "standard").strip().lower()
+if _RENDER_PROFILE not in _PROFILE_MODELS:
+    raise RuntimeError("H3_RENDER_PROFILE must be standard or enhanced.")
+
+
+def _validate_render_profile(job_input):
+    """Reject a payload routed to a worker with the other model profile."""
+    if not isinstance(job_input, dict) or job_input.get("fetch") or job_input.get("merge"):
+        return
+    requested = str(job_input.get("render_profile") or "standard").strip().lower()
+    if requested != _RENDER_PROFILE:
+        raise ValueError(
+            f"This worker is configured for {_RENDER_PROFILE} motion fidelity, not {requested}."
+        )
+    workflow = job_input.get("workflow")
+    loaders = [
+        node for node in (workflow or {}).values()
+        if isinstance(node, dict) and node.get("class_type") == "UNETLoader"
+    ]
+    if len(loaders) != 1 or loaders[0].get("inputs", {}).get("unet_name") != _PROFILE_MODELS[_RENDER_PROFILE]:
+        raise ValueError("The workflow model does not match this worker's motion-fidelity profile.")
 
 
 def _failure_summary(error):
@@ -89,6 +114,7 @@ def _render_in_background(job_input, session):
     job_id = delivery.get("job_id")
     stage = "rendering"
     try:
+        _validate_render_profile(job_input)
         # RunPod's base handler reads job["id"], which RunPod always supplies.
         result = render_handler({"id": job_id, "input": job_input})
         if not isinstance(result, dict) or result.get("error") or not result.get("delivered"):
@@ -152,6 +178,7 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                 time.sleep(2)
                 result = {"benchmark": True}
             else:
+                _validate_render_profile(payload["input"])
                 result = render_handler({"id": f"vast-sync-{uuid.uuid4()}", "input": payload["input"]})
             self._respond(200, result)
         except (ValueError, json.JSONDecodeError) as error:
