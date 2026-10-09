@@ -18,13 +18,13 @@ on Standard workers, together with the shared weights.
 ## Vast pool rollout status - 2026-10-09
 
 Both video pools use the verified shared image
-`ghcr.io/ddstar1/comfyui_minimax_h3_extender:vast-2e5f535@sha256:b139d38b79e575530170d047fcde7ebf7e1554a6e31176d76dc2a72a5b6e2054`.
-GitHub build `37951750313` succeeded for worker commit `2e5f535`; all 11 worker regressions passed inside the image.
+`ghcr.io/ddstar1/comfyui_minimax_h3_extender:vast-492e16e@sha256:6edf8865e1813de5cd688425d53967d7e9ab96785f9071e39471bf4a80d82010`.
+GitHub build `37958748055` published worker commit `492e16e`; final workflow cache export was still running at verification. All 12 worker regressions pass locally, and Docker runs the suite before publication.
 
 | Profile | Endpoint | Worker group | Template | Template hash |
 | --- | --- | --- | --- | --- |
-| Standard | 38350 | 48221 | 758655 | 44422bd529f54242b950d44016960790 |
-| Enhanced | 40231 | 50229 | 758656 | 5eba7f66c4e39d908a01039d35b6cf31 |
+| Standard | 38350 | 48221 | 758699 | 55b80b4637aa47e6a2ca6b6ba7285564 |
+| Enhanced | 40231 | 50229 | 758700 | 7777f82c8de7886c13c11dd7ded6e4b3 |
 
 Standard retains its 24 GB GPU / 48 GB CPU RAM filters and 100 GB disk.
 Enhanced retains its 80 GB GPU / 96 GB CPU RAM filters and 150 GB disk.
@@ -778,7 +778,7 @@ The shared worker adds a separate HTTPS API on TCP 18290: authenticated `/clipwe
 
 The platform discovers the mapped port from the account instance API, checks authenticated readiness/profile/availability, and submits directly. Vast routing grants remain capacity metadata only; they do not authorize direct renders. A local Vast session reports the active render load and is closed by existing completion/failure handling. Concurrent different jobs are rejected, repeat delivery IDs are acknowledged without rendering again for the lifetime of the worker process, and delivery/progress/failure callbacks retain their existing signatures. TLS protects request payloads and credentials; no Vast signature check is disabled. Enable platform `CLIPWEAVE_WORKER_AUTH=true` only after deploying matching worker templates and verifying TLS.
 
-Rotate the secret/certificate by updating workers first and switching platform credentials together; replace old workers before admitting new traffic. The certificate has a finite validity period and must be renewed before expiry. Rollout is in progress.
+Rotate the secret/certificate by updating workers first and switching platform credentials together; replace old workers before admitting new traffic. The certificate has a finite validity period and must be renewed before expiry. Authentication rollout is complete.
 
 
 ### Private template credential encoding
@@ -791,4 +791,9 @@ export CLIPWEAVE_WORKER_TLS_KEY="$(printf '%s' "$CLIPWEAVE_WORKER_TLS_KEY_B64" |
 exec bash /vast-start.sh
 ```
 
-The Standard and Enhanced template environments fit within the limit (3926 and 3956 characters). Live HTTPS health succeeded with the deployment secret and rejected a wrong secret with HTTP 401. Platform admission now discovers account-owned workers directly and uses authenticated HTTPS readiness rather than Vast routing grants. The router is consulted to request capacity only when no ready worker is available. Local capacity sessions retain load tracking; their metadata does not authorize a render. The cache-only acceptance probe and final platform switch are still being verified.
+The Standard and Enhanced template environments fit within the limit (3926 and 3956 characters). Live HTTPS health succeeded with the deployment secret and rejected a wrong secret with HTTP 401. Platform admission now discovers account-owned workers directly and uses authenticated HTTPS readiness rather than Vast routing grants. The router is consulted to request capacity only when no ready worker is available. Local capacity sessions retain load tracking; their metadata does not authorize a render. A live cache-only request was accepted, a repeated delivery ID was acknowledged without another job, and authenticated health returned ready and idle afterward. Incorrect tokens returned HTTP 401. No paid video generation was submitted.
+
+
+### Final authentication rollout verification
+
+Capacity sessions are created on the primary worker port (3000); completion closes them through the secondary port (3001). A regression covers this port distinction. Both pools use the pinned image and templates above. Vercel production deployment `dpl_AaSxste5niWr1pHt1ehjgrneHgRn` is READY with own authentication enabled; preview and local configuration are enabled too. The TLS private key is absent from Vercel. Normal five-minute cleanup is active again, and the temporary verification restore job has been removed. The existing 15-minute sleep and 30-minute total idle removal policy remains in force. Full paid rendering on the final image has not been newly tested.
