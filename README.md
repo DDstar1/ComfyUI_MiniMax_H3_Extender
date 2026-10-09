@@ -797,3 +797,12 @@ The Standard and Enhanced template environments fit within the limit (3926 and 3
 ### Final authentication rollout verification
 
 Capacity sessions are created on the primary worker port (3000); completion closes them through the secondary port (3001). A regression covers this port distinction. Both pools use the pinned image and templates above. Vercel production deployment `dpl_AaSxste5niWr1pHt1ehjgrneHgRn` is READY with own authentication enabled; preview and local configuration are enabled too. The TLS private key is absent from Vercel. Normal five-minute cleanup is active again, and the temporary verification restore job has been removed. The existing 15-minute sleep and 30-minute total idle removal policy remains in force. Full paid rendering on the final image has not been newly tested.
+
+
+## Current rollout and live validation — 2026-10-09
+
+ClipWeave-owned authenticated HTTPS submission is enabled locally and on Vercel. Both pools use the shared pinned `vast-492e16e` worker image; no image rebuild is needed for the latest recruitment/watchdog changes. Frontend commit `b331522` adds verified-first recruitment: verified matching offers are preferred before fresh capacity is requested, with unverified hosts allowed when none match. Starting/running workers are preserved, and existing GPU, memory, disk, reliability, price and host exclusions remain enforced. Commit `4369cf2` reduces stalled Docker-image replacement from 15 to 10 minutes without new completed layers. The separate 15-minute idle sleep / 30-minute idle removal policy and 30-minute queue deadline remain unchanged.
+
+Live Standard worker 55063044 (RTX PRO 4500) completed image/model setup, started ComfyUI, and accepted a render through the new authentication path. A subsequent render was observed actively sampling at step 1/15 with 100% GPU utilization. These observations confirm startup and active rendering, not final output quality or completed delivery for that subsequent render. The earlier job that exceeded the queue deadline remains failed with its reservation released and requires a new generation request.
+
+Validation: four authentication/recruitment/fidelity-routing tests, two startup-policy regressions, TypeScript and focused ESLint passed. No new environment variable is required for verified-first recruitment or the ten-minute watchdog threshold.
