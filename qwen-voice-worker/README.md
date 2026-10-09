@@ -20,3 +20,8 @@ whenever `qwen-voice-worker/` changes on `main`.
 - Like the H3 template, the Vast template needs `-p 3000:3000 -e WORKER_PORT=3000`.
 - Not yet deployed: there is no Vast voice endpoint, and the Next.js app still
   calls the RunPod endpoint (`RUNPOD_QWEN_TTS_ENDPOINT_ID`).
+
+
+## Platform documentation synchronization — 2026-10-09
+
+Latest video-pool selection, stopped-worker reporting, explicit director dialogue, prompt continuity ordering, ready-prefix full-story generation and interface updates are documented in the parent [README](../README.md). These changes do not modify the Qwen voice worker image or its generation behavior.
