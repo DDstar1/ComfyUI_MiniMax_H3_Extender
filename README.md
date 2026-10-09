@@ -770,3 +770,12 @@ values for any remaining mismatch. Six regression tests cover the observed
 243/221-frame timeline, stale clip rejection, identical-input invalidation and
 real two-tone extraction. Docker runs these tests with FFmpeg before publishing.
 Both pool templates now use the corrected image recorded above. A CPU-only check against the actual failed 19.334-second output extracted the 9.2-second continuation at 10.125 seconds, preserved its video frames, and matched the corresponding audio (correlation 0.9999). No new GPU generation was submitted; a full render on the new image remains to be verified after startup. Existing failed job records are unchanged.
+
+
+## ClipWeave-owned render authentication — 2026-10-09
+
+The shared worker adds a separate HTTPS API on TCP 18290: authenticated `/clipweave/health` and `/clipweave/generate`. Configure a random `CLIPWEAVE_WORKER_SECRET` (at least 32 characters), PEM `CLIPWEAVE_WORKER_TLS_CERT` and private PEM `CLIPWEAVE_WORKER_TLS_KEY` in private Vast templates. Certificate SAN must include `clipweave-worker`; the platform trusts this exact certificate and validates that hostname. Never use the test-only fixtures as deployment credentials. Expose TCP 18290. Missing/partial credentials fail closed; legacy templates with no credentials keep the existing secured Vast API.
+
+The platform discovers the mapped port from the account instance API, checks authenticated readiness/profile/availability, and submits directly. Vast routing grants remain capacity metadata only; they do not authorize direct renders. A local Vast session reports the active render load and is closed by existing completion/failure handling. Concurrent different jobs are rejected, repeat delivery IDs are acknowledged without rendering again for the lifetime of the worker process, and delivery/progress/failure callbacks retain their existing signatures. TLS protects request payloads and credentials; no Vast signature check is disabled. Enable platform `CLIPWEAVE_WORKER_AUTH=true` only after deploying matching worker templates and verifying TLS.
+
+Rotate the secret/certificate by updating workers first and switching platform credentials together; replace old workers before admitting new traffic. The certificate has a finite validity period and must be renewed before expiry. Rollout is in progress.

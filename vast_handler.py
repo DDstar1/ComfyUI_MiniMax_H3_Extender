@@ -18,6 +18,7 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 import requests
+from clipweave_direct import start_direct_server
 
 from vastai import BenchmarkConfig, HandlerConfig, LogActionConfig, Worker, WorkerConfig
 
@@ -29,6 +30,7 @@ LOG_FILE = Path("/tmp/clipweave-vast-model.log")
 MAX_BODY_BYTES = 32 * 1024 * 1024
 _ACTIVE_JOBS = set()
 _ACTIVE_LOCK = threading.Lock()
+_DIRECT_JOBS = set()
 _GENERIC_FAILURE_MESSAGES = {"job processing failed", "render failed", "render did not deliver a video"}
 _PROFILE_MODELS = {
     "standard": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
@@ -139,6 +141,55 @@ def _render_in_background(job_input, session):
             _ACTIVE_JOBS.discard(job_id)
 
 
+def _direct_health():
+    try:
+        with urlopen("http://127.0.0.1:8188/system_stats", timeout=2) as response:
+            ready = response.status == 200
+    except (OSError, URLError):
+        ready = False
+    with _ACTIVE_LOCK:
+        busy = bool(_ACTIVE_JOBS)
+    return {"ready": ready, "busy": busy, "profile": _RENDER_PROFILE, "protocol": 1}
+
+
+def _direct_submit(payload):
+    job_input = payload["input"]
+    _validate_render_profile(job_input)
+    delivery = job_input.get("delivery")
+    if not isinstance(delivery, dict) or not delivery.get("job_id"):
+        raise ValueError("Delivery is required")
+    job_id = str(delivery["job_id"])
+    with _ACTIVE_LOCK:
+        if job_id in _DIRECT_JOBS:
+            return 200, {"accepted": True, "job_id": job_id}
+        if _ACTIVE_JOBS:
+            return 409, {"error": "Worker is busy"}
+        _ACTIVE_JOBS.add(job_id)
+    try:
+        if not _direct_health()["ready"]:
+            raise RuntimeError("ComfyUI is not ready")
+        # This local session only reports load/lifetime to Vast. It does not
+        # authorize the render: ClipWeave's TLS/token boundary already did so.
+        grant = payload.get("capacity_grant")
+        if not isinstance(grant, dict):
+            raise ValueError("Capacity metadata required")
+        port = int(os.environ.get("WORKER_HTTP_PORT", "3001"))
+        response = requests.post(f"http://127.0.0.1:{port}/session/create", json={
+            "auth_data": grant, "payload": {"lifetime": 1800}}, timeout=10)
+        response.raise_for_status()
+        created = response.json()
+        created = created.get("response", created)
+        session = {"id": created["session_id"], "auth_data": grant}
+        with _ACTIVE_LOCK:
+            _DIRECT_JOBS.add(job_id)
+        threading.Thread(target=_render_in_background, args=(job_input, session), daemon=True).start()
+        return 202, {"accepted": True, "job_id": job_id}
+    except Exception:
+        with _ACTIVE_LOCK:
+            _ACTIVE_JOBS.discard(job_id)
+        raise
+
+
 class LocalModelHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path != "/health":
@@ -210,6 +261,7 @@ def wait_for_comfyui():
 
 if __name__ == "__main__":
     LOG_FILE.touch()
+    start_direct_server(_direct_health, _direct_submit)
     threading.Thread(target=ThreadingHTTPServer(("127.0.0.1", PORT), LocalModelHandler).serve_forever, daemon=True).start()
     threading.Thread(target=wait_for_comfyui, daemon=True).start()
     Worker(WorkerConfig(

@@ -5,6 +5,7 @@ COPY . /comfyui/custom_nodes/ComfyUI_MiniMax_H3_Extender
 RUN mv /handler.py /runpod_base_handler.py
 COPY runpod_handler.py /clipweave_runpod_handler.py
 COPY vast_handler.py /handler.py
+COPY clipweave_direct.py /clipweave_direct.py
 COPY vast_provision_models.py /vast_provision_models.py
 COPY vast-start.sh /vast-start.sh
 RUN chmod 755 /vast-start.sh
