@@ -31,7 +31,10 @@ PROFILE_MODELS = {
 RENDER_PROFILE = os.getenv("H3_RENDER_PROFILE", "standard").strip().lower()
 if RENDER_PROFILE not in PROFILE_MODELS:
     raise SystemExit("H3_RENDER_PROFILE must be 'standard' or 'enhanced'.")
-FILES = (PROFILE_MODELS[RENDER_PROFILE], *COMMON_FILES)
+# Enhanced workers can also serve Standard jobs without changing their model.
+# Standard workers never download BF16 and cannot accept Enhanced generation.
+FILES = ((*PROFILE_MODELS.values(), *COMMON_FILES) if RENDER_PROFILE == "enhanced"
+         else (PROFILE_MODELS["standard"], *COMMON_FILES))
 TOKEN = os.getenv("HF_TOKEN") or None
 
 

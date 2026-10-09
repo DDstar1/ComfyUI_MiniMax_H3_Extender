@@ -40,11 +40,11 @@ if _RENDER_PROFILE not in _PROFILE_MODELS:
 
 
 def _validate_render_profile(job_input):
-    """Reject a payload routed to a worker with the other model profile."""
+    """Allow INT8 on Enhanced, but never BF16 on a Standard worker."""
     if not isinstance(job_input, dict) or job_input.get("fetch") or job_input.get("merge"):
         return
     requested = str(job_input.get("render_profile") or "standard").strip().lower()
-    if requested != _RENDER_PROFILE:
+    if requested not in _PROFILE_MODELS or (requested == "enhanced" and _RENDER_PROFILE != "enhanced"):
         raise ValueError(
             f"This worker is configured for {_RENDER_PROFILE} motion fidelity, not {requested}."
         )
@@ -53,8 +53,8 @@ def _validate_render_profile(job_input):
         node for node in (workflow or {}).values()
         if isinstance(node, dict) and node.get("class_type") == "UNETLoader"
     ]
-    if len(loaders) != 1 or loaders[0].get("inputs", {}).get("unet_name") != _PROFILE_MODELS[_RENDER_PROFILE]:
-        raise ValueError("The workflow model does not match this worker's motion-fidelity profile.")
+    if len(loaders) != 1 or loaders[0].get("inputs", {}).get("unet_name") != _PROFILE_MODELS[requested]:
+        raise ValueError("The workflow model does not match the requested motion-fidelity profile.")
 
 
 def _failure_summary(error):

@@ -5,29 +5,31 @@ One Docker image now supports two Vast worker profiles through
 H3_RENDER_PROFILE:
 
 - standard (default) downloads minimax_h3_ref2va_pruned_int8_convrot.safetensors.
-- enhanced downloads minimax_h3_ref2va_pruned_bf16.safetensors.
+- enhanced downloads both INT8 and BF16 diffusion models, so it can serve either fidelity.
 
 Both keep the same INT8 Qwen3-VL text encoder and FP16/FP32 video and audio
 VAEs. Set the environment variable in each Vast template, not per job. The
 adapter validates both render_profile and the workflow's UNET before rendering,
-preventing an INT8 worker from accepting a BF16 request or the reverse. Model
-provisioning downloads only the profile's diffusion model plus the common
-weights, so persistent worker disks cache the correct files after their first
-startup.
+preventing an INT8 worker from accepting a BF16 request. Enhanced workers
+accept Standard requests with INT8 and Enhanced requests with BF16.
+Persistent disks cache both diffusion models on Enhanced workers and only INT8
+on Standard workers, together with the shared weights.
 
-## Enhanced Vast pool status — 2026-10-08
+## Enhanced Vast pool status — 2026-10-09
 
-The BF16-capable Vast image has been published as `vast-ac3fd67`. The private
-template `clipweave-minimax-h3-bf16` (id `756333`) is configured to start this
-image with `H3_RENDER_PROFILE=enhanced`, 150 GB disk, one 80 GB-or-larger GPU,
-and at least 96 GB system RAM. It has not started a worker.
+The deployed shared image is currently `vast-ac3fd67`. Enhanced uses endpoint
+`40231` (`clipweave-minimax-h3-bf16`), workergroup `50229`, and template
+`758183` (hash `1b7ab983996ccb2401a1dd28df5e5960`). The earlier incomplete
+ template `756333` is unused. The pool requires one 80 GB-or-larger GPU,
+96 GB system RAM, and a 150 GB disk. Enhanced is enabled on the platform.
 
-Vast requires a $15.00 balance before it will create the third serverless
-endpoint. The account was at $6.2351 during setup, so the BF16 endpoint and
-workergroup remain intentionally absent. After at least $8.7649 is added,
-create a zero-worker endpoint, attach template hash
-`5f39b7c88ab43f191572798e7e482115`, and configure the application with that
-endpoint's `VAST_BF16_ENDPOINT_ID` and `VAST_BF16_ENDPOINT_NAME`.
+The changes in this push add INT8 provisioning and one-way compatibility to
+Enhanced workers. GitHub builds a new Vast image automatically from the worker
+Python changes. After that build succeeds, update the Enhanced template to its
+new immutable image tag and replace old workers before setting
+`VAST_BF16_ACCEPTS_STANDARD=true` in the application. The fallback remains
+ disabled until that rollout is complete. Video pools sleep after 15 idle
+minutes and are removed after 30 total idle minutes by application cleanup.
 
 ## Changes on 2026-10-07 — Vast failure diagnostics
 
@@ -726,3 +728,12 @@ Latest checkpoint: local Google sign-in and project loading passed. The connecte
 local prompt-revision retry still returned invalid model output after the schema
 change; parser diagnostics are the next step. No render for this project has yet
 been submitted. Preserve the existing four-by-five-second project (20 seconds).
+
+## One-way fidelity fallback rollout — 2026-10-09
+
+These changes require a new shared worker image. Update the Enhanced Vast
+template to that image and replace old workers before enabling the application
+flag `VAST_BF16_ACCEPTS_STANDARD=true`. The application borrows only running
+Enhanced capacity after the Standard router cannot assign a worker. It does
+not boot an Enhanced GPU for a Standard request. BF16 requests are rejected
+on Standard workers even if upstream routing is misconfigured.
