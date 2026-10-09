@@ -18,20 +18,19 @@ on Standard workers, together with the shared weights.
 ## Vast pool rollout status - 2026-10-09
 
 Both video pools use the verified shared image
-`ghcr.io/ddstar1/comfyui_minimax_h3_extender:vast-6e4977b@sha256:a1a33820950b3c95e54b198e857f14dfd5d62dd4639c2ad3a4f8c5a82dd6d3f1`.
-GitHub build `37936924037` succeeded for worker commit `6e4977b`.
+`ghcr.io/ddstar1/comfyui_minimax_h3_extender:vast-a1f9167@sha256:a7e3cbdb84145c1e6972e5886a7be719b70f6369ea5d17838534daccf9909eb9`.
+GitHub build `37946635311` succeeded for worker commit `a1f9167`.
 
 | Profile | Endpoint | Worker group | Template | Template hash |
 | --- | --- | --- | --- | --- |
-| Standard | 38350 | 48221 | 758536 | 204238f7ba9e4646efbb999695e63e45 |
-| Enhanced | 40231 | 50229 | 758537 | 307840016bf638eeb5b1af2232880ba8 |
+| Standard | 38350 | 48221 | 758611 | 789c51f1db779d8ebb9ac9318f3b44ff |
+| Enhanced | 40231 | 50229 | 758612 | 04e60589b11fbac1237b246611f79bce |
 
 Standard retains its 24 GB GPU / 48 GB CPU RAM filters and 100 GB disk.
 Enhanced retains its 80 GB GPU / 96 GB CPU RAM filters and 150 GB disk.
 The price limits remain $0.30/hour and $1.20/hour respectively.
 `VAST_BF16_ACCEPTS_STANDARD=true` is enabled locally and in Vercel.
-The stopped old Standard worker is no longer present. Both pools were idle
-with no video instances at rollout verification; no paid render was submitted.
+Vast recycled Standard instance `55030470` onto the corrected pinned image; it was loading at rollout verification. No new paid render was submitted.
 Video pools sleep after 15 idle minutes and are removed after 30 total idle
 minutes by application cleanup. Recompile and regenerate affected old clips:
 the rollout does not rewrite existing media or repair previous cache contents.
@@ -770,5 +769,4 @@ exact segment video and reports duration/range
 values for any remaining mismatch. Six regression tests cover the observed
 243/221-frame timeline, stale clip rejection, identical-input invalidation and
 real two-tone extraction. Docker runs these tests with FFmpeg before publishing.
-Rollout of this correction is in progress; the image recorded above is the
-previous extraction implementation.
+Both pool templates now use the corrected image recorded above. A CPU-only check against the actual failed 19.334-second output extracted the 9.2-second continuation at 10.125 seconds, preserved its video frames, and matched the corresponding audio (correlation 0.9999). No new GPU generation was submitted; a full render on the new image remains to be verified after startup. Existing failed job records are unchanged.
