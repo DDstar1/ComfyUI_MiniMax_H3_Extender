@@ -18,19 +18,19 @@ on Standard workers, together with the shared weights.
 ## Vast pool rollout status - 2026-10-09
 
 Both video pools use the verified shared image
-`ghcr.io/ddstar1/comfyui_minimax_h3_extender:vast-a1f9167@sha256:a7e3cbdb84145c1e6972e5886a7be719b70f6369ea5d17838534daccf9909eb9`.
-GitHub build `37946635311` succeeded for worker commit `a1f9167`.
+`ghcr.io/ddstar1/comfyui_minimax_h3_extender:vast-2e5f535@sha256:b139d38b79e575530170d047fcde7ebf7e1554a6e31176d76dc2a72a5b6e2054`.
+GitHub build `37951750313` succeeded for worker commit `2e5f535`; all 11 worker regressions passed inside the image.
 
 | Profile | Endpoint | Worker group | Template | Template hash |
 | --- | --- | --- | --- | --- |
-| Standard | 38350 | 48221 | 758611 | 789c51f1db779d8ebb9ac9318f3b44ff |
-| Enhanced | 40231 | 50229 | 758612 | 04e60589b11fbac1237b246611f79bce |
+| Standard | 38350 | 48221 | 758655 | 44422bd529f54242b950d44016960790 |
+| Enhanced | 40231 | 50229 | 758656 | 5eba7f66c4e39d908a01039d35b6cf31 |
 
 Standard retains its 24 GB GPU / 48 GB CPU RAM filters and 100 GB disk.
 Enhanced retains its 80 GB GPU / 96 GB CPU RAM filters and 150 GB disk.
 The price limits remain $0.30/hour and $1.20/hour respectively.
 `VAST_BF16_ACCEPTS_STANDARD=true` is enabled locally and in Vercel.
-Vast recycled Standard instance `55030470` onto the corrected pinned image; it was loading at rollout verification. No new paid render was submitted.
+Both pools now have the private HTTPS credentials and exposed TCP 18290. Replacement Standard workers download their weights during cold startup. No paid video render was submitted for authentication verification.
 Video pools sleep after 15 idle minutes and are removed after 30 total idle
 minutes by application cleanup. Recompile and regenerate affected old clips:
 the rollout does not rewrite existing media or repair previous cache contents.
@@ -779,3 +779,16 @@ The shared worker adds a separate HTTPS API on TCP 18290: authenticated `/clipwe
 The platform discovers the mapped port from the account instance API, checks authenticated readiness/profile/availability, and submits directly. Vast routing grants remain capacity metadata only; they do not authorize direct renders. A local Vast session reports the active render load and is closed by existing completion/failure handling. Concurrent different jobs are rejected, repeat delivery IDs are acknowledged without rendering again for the lifetime of the worker process, and delivery/progress/failure callbacks retain their existing signatures. TLS protects request payloads and credentials; no Vast signature check is disabled. Enable platform `CLIPWEAVE_WORKER_AUTH=true` only after deploying matching worker templates and verifying TLS.
 
 Rotate the secret/certificate by updating workers first and switching platform credentials together; replace old workers before admitting new traffic. The certificate has a finite validity period and must be renewed before expiry. Rollout is in progress.
+
+
+### Private template credential encoding
+
+Vast templates have a 4096-character environment limit and did not preserve multiline PEM values in the tested launch. The active templates therefore pass single-line `CLIPWEAVE_WORKER_TLS_CERT_B64` and `CLIPWEAVE_WORKER_TLS_KEY_B64` with the secret, using a deployment-specific 2048-bit RSA certificate. Their onstart script decodes them into the runtime PEM variables before running `/vast-start.sh`:
+
+```bash
+export CLIPWEAVE_WORKER_TLS_CERT="$(printf '%s' "$CLIPWEAVE_WORKER_TLS_CERT_B64" | base64 -d)"
+export CLIPWEAVE_WORKER_TLS_KEY="$(printf '%s' "$CLIPWEAVE_WORKER_TLS_KEY_B64" | base64 -d)"
+exec bash /vast-start.sh
+```
+
+The Standard and Enhanced template environments fit within the limit (3926 and 3956 characters). Live HTTPS health succeeded with the deployment secret and rejected a wrong secret with HTTP 401. Platform admission now discovers account-owned workers directly and uses authenticated HTTPS readiness rather than Vast routing grants. The router is consulted to request capacity only when no ready worker is available. Local capacity sessions retain load tracking; their metadata does not authorize a render. The cache-only acceptance probe and final platform switch are still being verified.
