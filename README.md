@@ -806,3 +806,34 @@ ClipWeave-owned authenticated HTTPS submission is enabled locally and on Vercel.
 Live Standard worker 55063044 (RTX PRO 4500) completed image/model setup, started ComfyUI, and accepted a render through the new authentication path. A subsequent render was observed actively sampling at step 1/15 with 100% GPU utilization. These observations confirm startup and active rendering, not final output quality or completed delivery for that subsequent render. The earlier job that exceeded the queue deadline remains failed with its reservation released and requires a new generation request.
 
 Validation: four authentication/recruitment/fidelity-routing tests, two startup-policy regressions, TypeScript and focused ESLint passed. No new environment variable is required for verified-first recruitment or the ten-minute watchdog threshold.
+
+
+## Session change record — 2026-10-09
+
+### Render authentication and worker admission
+
+- Added the worker's private HTTPS API on mapped TCP 18290: authenticated GET /clipweave/health and POST /clipweave/generate. Requests use a constant-time bearer-token comparison and verified TLS with the deployment certificate and hostname clipweave-worker. Missing/partial credentials fail closed; legacy templates with no credentials retain Vast's signed API. No Vast signature check is disabled.
+- Added the platform's server-only HTTPS client with certificate trust verification, response/request limits, timeout handling and rejection of plain HTTP. Admission discovers account-owned instances and verifies readiness, availability, protocol and fidelity directly, without requiring a Vast ready grant or signature. Vast still supplies GPU provisioning, capacity demand and account instance information.
+- Preserved signed progress/delivery/failure callbacks, job settlement and existing wallet reservation/refund paths. Busy workers reject another job; already-accepted delivery IDs are acknowledged without rerendering during the worker process lifetime.
+- Corrected capacity session creation to primary port 3000; existing session completion uses secondary port 3001. Added a regression for this distinction, caught by the live cache-only acceptance probe.
+
+### Configuration and deployment
+
+- Local frontend .env.local contains CLIPWEAVE_WORKER_AUTH=true, CLIPWEAVE_WORKER_SECRET, CLIPWEAVE_WORKER_TLS_CERT and the provisioning-only CLIPWEAVE_WORKER_TLS_KEY. Vercel production/preview have the enabled flag, secret and public certificate; the private TLS key is absent from Vercel and browser variables. Restart localhost after environment changes.
+- Private Vast templates pass the secret and single-line CLIPWEAVE_WORKER_TLS_CERT_B64 / CLIPWEAVE_WORKER_TLS_KEY_B64, then decode PEM values in onstart before /vast-start.sh. This avoids multiline launch issues and stays within Vast's 4096-character environment limit. Renew the certificate before expiry and coordinate credential rotation across workers and platform.
+- Shared image: ghcr.io/ddstar1/comfyui_minimax_h3_extender:vast-492e16e@sha256:6edf8865e1813de5cd688425d53967d7e9ab96785f9071e39471bf4a80d82010. Standard endpoint 38350 / group 48221 uses template 758699; Enhanced endpoint 40231 / group 50229 uses template 758700. Both retain their existing resource and price limits. Enhanced can serve INT8 Standard jobs and BF16 Enhanced jobs; Standard cannot accept Enhanced jobs.
+- Authentication production deployment dpl_AaSxste5niWr1pHt1ehjgrneHgRn was verified READY. Normal five-minute cleanup was restored after bounded verification maintenance, and the temporary restore job was removed.
+
+### GPU availability and startup recovery
+
+- Added verified-first recruitment for both fidelity pools. Before requesting capacity with no starting/running worker, check matching verified on-demand offers; if none exist, permit unverified recruitment. Re-evaluate during later recruitment, with checks coalesced for 60 seconds per server process. Do not replace a working host solely because a verified offer appears. Preserve all other limits and failed-host exclusions.
+- Reduced stalled Docker-image replacement to 10 minutes without new completed layers. Retry countdowns and repeated old log lines do not reset the timer; new completed layers do. The five-minute stall warning, two-replacement cap and one-hour failed-host exclusion remain unchanged.
+- The ten-minute image watchdog is distinct from model provisioning and from the idle policy. Sleep remains after 15 idle minutes, removal after 30 total idle minutes. The generation queue still expires after 30 minutes with reserved credit released; it does not restart automatically when a worker later becomes ready.
+- No new environment variable or worker-image rebuild is needed for recruitment/watchdog changes. GPU offers can disappear between availability checks and rental, so fallback improves selection without guaranteeing immediate capacity.
+
+### Verification and remaining limits
+
+- Twelve worker regressions pass locally; image publication runs worker tests including real FFmpeg media checks. Four frontend auth/recruitment/fidelity-routing tests, two startup-policy tests, TypeScript and focused lint passed.
+- Live HTTPS health accepted the correct secret and rejected a wrong token with 401. A cache-only request was accepted, its duplicate acknowledged without another job, and worker health returned ready/idle afterward.
+- Live RTX PRO 4500 worker 55063044 completed all model provisioning and began rendering. A subsequent generation was observed at sampling step 1/15 with 100% GPU use. This record does not claim completed delivery or assess the subsequent output's audio/video quality.
+- Historical failed jobs and previously generated media are unchanged. The preceding continuation-audio/cache corrections remain included in the shared image; retry affected jobs to produce new output.
