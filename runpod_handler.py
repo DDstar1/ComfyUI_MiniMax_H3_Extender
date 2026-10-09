@@ -731,24 +731,46 @@ def _output_artifact_path(artifact):
 
 
 def _sync_audio_output_to_chain(namespace, source):
-    """Replace the video-only Extender sidecar with ComfyUI's muxed A/V output."""
+    """Mux only this segment's audio from the potentially cumulative output.
+
+    Exact-final sidecars already contain the correct, overlap-trimmed video.
+    Never replace their video with the assembled chain returned by ComfyUI.
+    """
     if not source or not _has_audio_stream(source):
         return None
     target, _ = _latest_chain_segment(namespace)
     if target is None:
-        return None
-    temporary = target.with_name(f".{target.name}.audio-sync-{os.getpid()}.tmp")
+        raise RuntimeError("No exact clip segment exists for the rendered output")
+    duration = _ffprobe_duration(target)
+    source_duration = _ffprobe_duration(source)
+    tolerance = 0.15  # Encoder/container rounding, not a whole overlap or clip.
+    if abs(source_duration - duration) <= tolerance:
+        offset = 0.0  # A renderer may already return only the new segment.
+    else:
+        match = re.fullmatch(r"ref2va_(\d+)\.[^.]+", target.name)
+        if match is None:
+            raise RuntimeError("Cannot identify the rendered clip segment")
+        offset = _segment_preview_offset(target.parent.parent, int(match.group(1)))
+        if offset <= 0 or abs(source_duration - (offset + duration)) > tolerance:
+            raise RuntimeError("Rendered audio timeline does not match the exact clip segment")
+    temporary = target.with_name(f".{target.stem}.audio-sync-{os.getpid()}.tmp.mp4")
     try:
-        shutil.copyfile(source, temporary)
-        if not _has_audio_stream(temporary):
-            raise RuntimeError("ComfyUI output lost its audio stream before cache sync")
+        command = [
+            _find_ffmpeg(), "-y", "-i", str(target),
+            "-ss", f"{offset:.9f}", "-t", f"{duration:.9f}", "-i", str(source),
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+            "-t", f"{duration:.9f}", "-movflags", "+faststart", str(temporary),
+        ]
+        completed = subprocess.run(command, capture_output=True, timeout=600, check=False)
+        if completed.returncode != 0 or not temporary.is_file() or not _has_audio_stream(temporary):
+            raise RuntimeError("Could not extract this clip's generated audio")
+        if abs(_ffprobe_duration(temporary) - duration) > tolerance:
+            raise RuntimeError("Extracted clip duration does not match its video segment")
         os.replace(temporary, target)
         return target
     finally:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+        temporary.unlink(missing_ok=True)
 
 
 def _volume_video_result(namespace, worker_rate_usd_per_second=None):
@@ -949,11 +971,12 @@ def _render_with_progress(job, job_input, reporter, rate_value, started_at, queu
     if videos:
         try:
             synced = _sync_audio_output_to_chain(job_input.get("cache_namespace"), output_video)
-            if synced:
-                output_video = synced
-                print("[ClipWeave] Synced muxed audio into the chain cache.", flush=True)
+            output_video = synced or _latest_chain_segment(job_input.get("cache_namespace"))[0]
+            if output_video is None:
+                return {"error": "No isolated video segment was found for this clip"}
+            print("[ClipWeave] Selected isolated clip video and audio.", flush=True)
         except (OSError, RuntimeError, ValueError) as error:
-            print(f"[ClipWeave] Could not sync audio to the chain cache: {error}", flush=True)
+            return {"error": f"Could not isolate the rendered clip: {error}"}
     try:
         _sync_context_to_r2(job_input.get("cache_namespace"), cache_root)
     except Exception as error:

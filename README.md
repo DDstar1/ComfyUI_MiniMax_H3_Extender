@@ -17,9 +17,10 @@ on Standard workers, together with the shared weights.
 
 ## Enhanced Vast pool status — 2026-10-09
 
-The deployed shared image is currently `vast-ac3fd67`. Enhanced uses endpoint
+The Enhanced pool now uses `vast-0b9797e`, pinned to digest
+`sha256:ce3369dc2f323db0f3e32202a8a828f3d67c347856c43ea859e77c9c597835b1`. Enhanced uses endpoint
 `40231` (`clipweave-minimax-h3-bf16`), workergroup `50229`, and template
-`758183` (hash `1b7ab983996ccb2401a1dd28df5e5960`). The earlier incomplete
+`758485` (hash `b20a3a5f1826d505e9ccff4eec0e8ca4`). The earlier incomplete
  template `756333` is unused. The pool requires one 80 GB-or-larger GPU,
 96 GB system RAM, and a 150 GB disk. Enhanced is enabled on the platform.
 
@@ -737,3 +738,16 @@ flag `VAST_BF16_ACCEPTS_STANDARD=true`. The application borrows only running
 Enhanced capacity after the Standard router cannot assign a worker. It does
 not boot an Enhanced GPU for a Standard request. BF16 requests are rejected
 on Standard workers even if upstream routing is misconfigured.
+
+## Dual-model worker rollout completed — 2026-10-09
+
+GitHub run `37933140199` succeeded for commit `0b9797e`. Enhanced endpoint
+`40231` / workergroup `50229` now uses template `758485` and the new pinned
+image. No old Enhanced instances remain. `VAST_BF16_ACCEPTS_STANDARD=true`
+is configured locally and in Vercel production/preview. New Enhanced workers
+download both INT8 and BF16 before accepting requests. Standard workers retain
+INT8 only. The pool starts on demand; no live render was submitted for rollout.
+
+### Individual clip audio correction
+
+The adapter preserves the exact, overlap-trimmed video sidecar and muxes only its corresponding audio range from ComfyUI output. An assembled chain can no longer overwrite the newest clip. Timeline mismatches fail before delivery or cache upload. Both Standard and Enhanced use this shared adapter; rebuild and roll out the worker image to activate the fix. Run `python -m unittest discover -s tests`; set `FFMPEG_BINARY` for the real two-tone media regression.
