@@ -67,11 +67,18 @@ class ClipAudioTests(unittest.TestCase):
             source = Path(directory) / "assembled.mp4"
             target.write_bytes(b"original-video")
             scope = handler_functions()
-            scope.update(_has_audio_stream=lambda _: True, _latest_chain_segment=lambda _: (target, None),
+            selection = []
+            def select_segment(namespace, *, ensure_audio=True):
+                selection.append(ensure_audio)
+                if ensure_audio:
+                    raise AssertionError("Legacy preview mux must not touch a fresh segment")
+                return target, None
+            scope.update(_has_audio_stream=lambda _: True, _latest_chain_segment=select_segment,
                          _ffprobe_duration=lambda path: 10 if path == target else 30)
             with self.assertRaisesRegex(RuntimeError, "timeline does not match"):
                 scope["_sync_audio_output_to_chain"]("test", source)
             self.assertEqual(target.read_bytes(), b"original-video")
+            self.assertEqual(selection, [False])
 
     @unittest.skipUnless(os.environ.get("FFMPEG_BINARY") or shutil.which("ffmpeg"), "FFmpeg required for media regression")
     def test_cumulative_output_yields_only_latest_video_and_tone(self):
@@ -110,7 +117,7 @@ class ClipAudioTests(unittest.TestCase):
             expected_pixels = run("-i", str(target), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1")
             scope = handler_functions()
             scope.update(_has_audio_stream=has_audio, _ffprobe_duration=duration,
-                         _latest_chain_segment=lambda _: (target, None), _find_ffmpeg=lambda: ffmpeg)
+                         _latest_chain_segment=lambda _, **kwargs: (target, None), _find_ffmpeg=lambda: ffmpeg)
             self.assertEqual(scope["_sync_audio_output_to_chain"]("test", source), target)
             self.assertAlmostEqual(duration(target), 1, delta=0.1)
             # The current decoder supplies boundaries for this exact output.

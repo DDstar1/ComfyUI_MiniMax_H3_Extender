@@ -704,7 +704,7 @@ def _select_project_cache(job):
     return cache_root
 
 
-def _latest_chain_segment(namespace):
+def _latest_chain_segment(namespace, *, ensure_audio=True):
     """Return the most recent clip segment and its volume-relative key."""
     digest = _namespace_digest(namespace)
     directory = _CACHE_BASE_ROOT / digest[:2] / digest / "chain_extender_1.final.video"
@@ -714,7 +714,7 @@ def _latest_chain_segment(namespace):
     )
     if not segments:
         return None, None
-    segment = _ensure_segment_audio(segments[-1])
+    segment = _ensure_segment_audio(segments[-1]) if ensure_audio else segments[-1]
     return segment, segment.relative_to(_CACHE_BASE_ROOT.parent).as_posix()
 
 
@@ -784,7 +784,7 @@ def _sync_audio_output_to_chain(namespace, source, preview_info=None):
     """
     if not source or not _has_audio_stream(source):
         return None
-    target, _ = _latest_chain_segment(namespace)
+    target, _ = _latest_chain_segment(namespace, ensure_audio=False)
     if target is None:
         raise RuntimeError("No exact clip segment exists for the rendered output")
     duration = _ffprobe_duration(target)

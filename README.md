@@ -764,7 +764,9 @@ two-clip output while the disk held only the first clip. Extender now declares
 external state changed on every execution, while its own manifest continues
 reusing valid latents. The adapter captures Final Decode's actual
 `h3_preview_info.color_timeline` and validates the clip index before muxing the
-matching audio. It preserves the exact segment video and reports duration/range
+matching audio. Fresh delivery bypasses the legacy preview-audio fallback so it cannot modify
+the video sidecar before the output timeline is validated. It preserves the
+exact segment video and reports duration/range
 values for any remaining mismatch. Six regression tests cover the observed
 243/221-frame timeline, stale clip rejection, identical-input invalidation and
 real two-tone extraction. Docker runs these tests with FFmpeg before publishing.
