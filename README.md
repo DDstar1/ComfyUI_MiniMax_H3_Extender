@@ -15,22 +15,26 @@ accept Standard requests with INT8 and Enhanced requests with BF16.
 Persistent disks cache both diffusion models on Enhanced workers and only INT8
 on Standard workers, together with the shared weights.
 
-## Enhanced Vast pool status — 2026-10-09
+## Vast pool rollout status - 2026-10-09
 
-The Enhanced pool now uses `vast-0b9797e`, pinned to digest
-`sha256:ce3369dc2f323db0f3e32202a8a828f3d67c347856c43ea859e77c9c597835b1`. Enhanced uses endpoint
-`40231` (`clipweave-minimax-h3-bf16`), workergroup `50229`, and template
-`758485` (hash `b20a3a5f1826d505e9ccff4eec0e8ca4`). The earlier incomplete
- template `756333` is unused. The pool requires one 80 GB-or-larger GPU,
-96 GB system RAM, and a 150 GB disk. Enhanced is enabled on the platform.
+Both video pools use the verified shared image
+`ghcr.io/ddstar1/comfyui_minimax_h3_extender:vast-6e4977b@sha256:a1a33820950b3c95e54b198e857f14dfd5d62dd4639c2ad3a4f8c5a82dd6d3f1`.
+GitHub build `37936924037` succeeded for worker commit `6e4977b`.
 
-The changes in this push add INT8 provisioning and one-way compatibility to
-Enhanced workers. GitHub builds a new Vast image automatically from the worker
-Python changes. After that build succeeds, update the Enhanced template to its
-new immutable image tag and replace old workers before setting
-`VAST_BF16_ACCEPTS_STANDARD=true` in the application. The fallback remains
- disabled until that rollout is complete. Video pools sleep after 15 idle
-minutes and are removed after 30 total idle minutes by application cleanup.
+| Profile | Endpoint | Worker group | Template | Template hash |
+| --- | --- | --- | --- | --- |
+| Standard | 38350 | 48221 | 758536 | 204238f7ba9e4646efbb999695e63e45 |
+| Enhanced | 40231 | 50229 | 758537 | 307840016bf638eeb5b1af2232880ba8 |
+
+Standard retains its 24 GB GPU / 48 GB CPU RAM filters and 100 GB disk.
+Enhanced retains its 80 GB GPU / 96 GB CPU RAM filters and 150 GB disk.
+The price limits remain $0.30/hour and $1.20/hour respectively.
+`VAST_BF16_ACCEPTS_STANDARD=true` is enabled locally and in Vercel.
+The stopped old Standard worker is no longer present. Both pools were idle
+with no video instances at rollout verification; no paid render was submitted.
+Video pools sleep after 15 idle minutes and are removed after 30 total idle
+minutes by application cleanup. Recompile and regenerate affected old clips:
+the rollout does not rewrite existing media or repair previous cache contents.
 
 ## Changes on 2026-10-07 — Vast failure diagnostics
 
@@ -750,4 +754,4 @@ INT8 only. The pool starts on demand; no live render was submitted for rollout.
 
 ### Individual clip audio correction
 
-The adapter preserves the exact, overlap-trimmed video sidecar and muxes only its corresponding audio range from ComfyUI output. An assembled chain can no longer overwrite the newest clip. Timeline mismatches fail before delivery or cache upload. Both Standard and Enhanced use this shared adapter; rebuild and roll out the worker image to activate the fix. Run `python -m unittest discover -s tests`; set `FFMPEG_BINARY` for the real two-tone media regression.
+The adapter preserves the exact, overlap-trimmed video sidecar and muxes only its corresponding audio range from ComfyUI output. An assembled chain can no longer overwrite the newest clip. Timeline mismatches fail before delivery or cache upload. Both Standard and Enhanced use this shared adapter; the pinned image above activates the fix on new workers. Run `python -m unittest discover -s tests`; set `FFMPEG_BINARY` for the real two-tone media regression.
