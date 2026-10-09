@@ -3,6 +3,7 @@ import ast
 import json
 import sys
 import threading
+from types import SimpleNamespace
 import unittest
 from pathlib import Path
 from http.server import ThreadingHTTPServer
@@ -67,3 +68,24 @@ class DirectAuthTests(unittest.TestCase):
         scope["_ACTIVE_JOBS"].add("other-job")
         self.assertEqual(scope["_direct_submit"]({"input": {"delivery": {"job_id": "new-job"}}})[0], 409)
         self.assertEqual(scope["_ACTIVE_JOBS"], {"other-job"})
+
+    def test_accepted_job_creates_capacity_session_on_primary_port(self):
+        tree = ast.parse((Path(__file__).resolve().parents[1] / "vast_handler.py").read_text())
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_direct_submit")
+        posts, starts = [], []
+        def post(url, **kwargs):
+            posts.append((url, kwargs))
+            return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"session_id": "capacity-test"})
+        scope = {"_validate_render_profile": lambda value: None, "_ACTIVE_LOCK": threading.Lock(),
+                 "_ACTIVE_JOBS": set(), "_DIRECT_JOBS": set(), "_direct_health": lambda: {"ready": True},
+                 "os": SimpleNamespace(environ={"WORKER_PORT": "3000", "WORKER_HTTP_PORT": "3001"}),
+                 "requests": SimpleNamespace(post=post), "_render_in_background": lambda *args: None,
+                 "threading": SimpleNamespace(Thread=lambda **kwargs: SimpleNamespace(start=lambda: starts.append(kwargs)))}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "vast_handler.py", "exec"), scope)
+        payload = {"input": {"delivery": {"job_id": "new-job"}}, "capacity_grant": {"cost": 100}}
+        self.assertEqual(scope["_direct_submit"](payload)[0], 202)
+        self.assertEqual(posts[0][0], "http://127.0.0.1:3000/session/create")
+        self.assertEqual(starts[0]["args"][1]["id"], "capacity-test")
+        self.assertEqual(scope["_direct_submit"](payload)[0], 200)
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(len(starts), 1)

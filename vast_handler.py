@@ -173,7 +173,9 @@ def _direct_submit(payload):
         grant = payload.get("capacity_grant")
         if not isinstance(grant, dict):
             raise ValueError("Capacity metadata required")
-        port = int(os.environ.get("WORKER_HTTP_PORT", "3001"))
+        # The secondary HTTP port exposes /session/end only. Creation lives on
+        # the primary worker port; our templates keep this loopback hop HTTP.
+        port = int(os.environ.get("WORKER_PORT", "3000"))
         response = requests.post(f"http://127.0.0.1:{port}/session/create", json={
             "auth_data": grant, "payload": {"lifetime": 1800}}, timeout=10)
         response.raise_for_status()
@@ -184,7 +186,8 @@ def _direct_submit(payload):
             _DIRECT_JOBS.add(job_id)
         threading.Thread(target=_render_in_background, args=(job_input, session), daemon=True).start()
         return 202, {"accepted": True, "job_id": job_id}
-    except Exception:
+    except Exception as error:
+        print(f"[ClipWeave] Could not accept direct render: {_failure_summary(error)}", flush=True)
         with _ACTIVE_LOCK:
             _ACTIVE_JOBS.discard(job_id)
         raise
