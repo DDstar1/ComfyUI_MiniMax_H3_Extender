@@ -28,7 +28,7 @@ GitHub build `37958748055` published worker commit `492e16e`; final workflow cac
 
 Standard retains its 24 GB GPU / 48 GB CPU RAM filters and 100 GB disk.
 Enhanced retains its 80 GB GPU / 96 GB CPU RAM filters and 150 GB disk.
-The price limits remain $0.30/hour and $1.20/hour respectively.
+The current price limits are $0.50/hour and $1.50/hour respectively.
 `VAST_BF16_ACCEPTS_STANDARD=true` is enabled locally and in Vercel.
 Both pools now have the private HTTPS credentials and exposed TCP 18290. Replacement Standard workers download their weights during cold startup. No paid video render was submitted for authentication verification.
 Video pools sleep after 15 idle minutes and are removed after 30 total idle
@@ -837,3 +837,8 @@ Validation: four authentication/recruitment/fidelity-routing tests, two startup-
 - Live HTTPS health accepted the correct secret and rejected a wrong token with 401. A cache-only request was accepted, its duplicate acknowledged without another job, and worker health returned ready/idle afterward.
 - Live RTX PRO 4500 worker 55063044 completed all model provisioning and began rendering. A subsequent generation was observed at sampling step 1/15 with 100% GPU use. This record does not claim completed delivery or assess the subsequent output's audio/video quality.
 - Historical failed jobs and previously generated media are unchanged. The preceding continuation-audio/cache corrections remain included in the shared image; retry affected jobs to produce new output.
+
+
+### Current GPU rental price caps — 2026-10-09
+
+Live Vast worker-group filters were updated and read back: Standard group 48221 permits dph_total <= $0.50/hour; Enhanced group 50229 permits dph_total <= $1.50/hour. Cheapest-verified-first selection is preserved. These are maximum offer prices, not target spending; separately billed storage/network charges can add cost. Other hardware, reliability and host-exclusion limits remain unchanged. Obsolete recruitment machine equalities were cleared so the next selection can consider offers within the higher caps. No environment change or worker-image rebuild is required.
