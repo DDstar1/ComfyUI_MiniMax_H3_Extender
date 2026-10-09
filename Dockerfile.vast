@@ -19,6 +19,11 @@ RUN uv pip install --no-cache -r /comfyui/custom_nodes/ComfyUI_MiniMax_H3_Extend
     && cd /comfyui \
     && timeout 300 python main.py --quick-test-for-ci --cpu
 
+# Verify extraction with actual FFmpeg inside the published worker image.
+RUN FFMPEG_BINARY=$(python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())") \
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest discover \
+    -s /comfyui/custom_nodes/ComfyUI_MiniMax_H3_Extender/tests -v
+
 # Vast containers use their own persistent disk; the R2 sync in the shared
 # handler makes motion context available to replacement workers.
 ENV H3_CACHE_ROOT=/workspace/comfytr-cache

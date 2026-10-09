@@ -755,3 +755,18 @@ INT8 only. The pool starts on demand; no live render was submitted for rollout.
 ### Individual clip audio correction
 
 The adapter preserves the exact, overlap-trimmed video sidecar and muxes only its corresponding audio range from ComfyUI output. An assembled chain can no longer overwrite the newest clip. Timeline mismatches fail before delivery or cache upload. Both Standard and Enhanced use this shared adapter; the pinned image above activates the fix on new workers. Run `python -m unittest discover -s tests`; set `FFMPEG_BINARY` for the real two-tone media regression.
+
+### Restored-cache continuation correction - 2026-10-09
+
+A failed continuation exposed a mismatch between R2-restored disk state and
+ComfyUI's in-memory node result cache: an identical workflow could reuse a
+two-clip output while the disk held only the first clip. Extender now declares
+external state changed on every execution, while its own manifest continues
+reusing valid latents. The adapter captures Final Decode's actual
+`h3_preview_info.color_timeline` and validates the clip index before muxing the
+matching audio. It preserves the exact segment video and reports duration/range
+values for any remaining mismatch. Six regression tests cover the observed
+243/221-frame timeline, stale clip rejection, identical-input invalidation and
+real two-tone extraction. Docker runs these tests with FFmpeg before publishing.
+Rollout of this correction is in progress; the image recorded above is the
+previous extraction implementation.

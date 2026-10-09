@@ -3606,6 +3606,13 @@ def _import_project_archive(owner_id, archive_path):
 
 class MiniMaxH3Extender:
     @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        # The worker restores/switches the authoritative disk cache before a
+        # job. Identical workflow inputs do not mean identical disk state.
+        # Re-evaluate the Extender; its own manifest still reuses valid latents.
+        return float("nan")
+
+    @classmethod
     def INPUT_TYPES(cls):
         sampler_names = list(comfy.samplers.SAMPLER_NAMES)
         scheduler_names = list(comfy.samplers.SCHEDULER_NAMES)

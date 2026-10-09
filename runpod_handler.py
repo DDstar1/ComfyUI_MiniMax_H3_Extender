@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -79,6 +80,7 @@ class _ProgressReporter:
         self.sent = None
         self.closed = False
         self.render_error = None
+        self.video_timelines = {}
         self.wake = threading.Event()
         if self.url:
             threading.Thread(target=self._send_loop, daemon=True).start()
@@ -237,6 +239,10 @@ def _history_with_video_outputs(prompt_id):
     history = _original_get_history(prompt_id)
     prompt_history = history.get(prompt_id, {})
     for node_output in prompt_history.get("outputs", {}).values():
+        if _active_progress is not None:
+            for info in node_output.get("h3_preview_info", []):
+                if isinstance(info, dict) and isinstance(info.get("autosave_path"), str):
+                    _active_progress.video_timelines[Path(info["autosave_path"]).name] = info
         media = list(node_output.get("images", []))
         for key in _VIDEO_KEYS:
             values = node_output.get(key, [])
@@ -730,7 +736,47 @@ def _output_artifact_path(artifact):
     return candidate if candidate.is_file() else None
 
 
-def _sync_audio_output_to_chain(namespace, source):
+def _decoded_clip_audio_offset(target, source_duration, duration, preview_info):
+    """Use the decoder's actual timeline, including seam-corrected boundaries."""
+    tolerance = 0.15
+    match = re.fullmatch(r"ref2va_(\d+)\.[^.]+", target.name)
+    if match is None:
+        raise RuntimeError("Cannot identify the rendered clip segment")
+    index = int(match.group(1))
+    if preview_info is not None:
+        timeline = preview_info.get("color_timeline")
+        if not isinstance(timeline, list) or not timeline:
+            raise RuntimeError("The decoder did not provide clip timeline boundaries")
+        if preview_info.get("clip") != index + 1:
+            raise RuntimeError(
+                f"Restored cache contains clip {index + 1}, but decoder output belongs to clip {preview_info.get('clip')}"
+            )
+        entry = next((item for item in timeline if isinstance(item, dict) and item.get("index") == index), None)
+        try:
+            offset, end = float(entry["start"]), float(entry["end"])
+        except (TypeError, KeyError, ValueError) as error:
+            raise RuntimeError("The decoder clip timeline is invalid") from error
+        if not math.isfinite(offset) or not math.isfinite(end) or offset < 0 or end <= offset:
+            raise RuntimeError("The decoder clip timeline is invalid")
+        if abs(duration - (end - offset)) > tolerance or abs(source_duration - end) > tolerance:
+            raise RuntimeError(
+                f"Decoded clip timeline mismatch: segment={duration:.3f}s, output={source_duration:.3f}s, "
+                f"range={offset:.3f}-{end:.3f}s"
+            )
+        return offset
+    if abs(source_duration - duration) <= tolerance:
+        return 0.0
+    # Compatibility with older decoder versions which have no UI timeline.
+    offset = _segment_preview_offset(target.parent.parent, index)
+    if offset <= 0 or abs(source_duration - (offset + duration)) > tolerance:
+        raise RuntimeError(
+            f"Rendered audio timeline does not match the exact clip segment: "
+            f"segment={duration:.3f}s, output={source_duration:.3f}s, offset={offset:.3f}s"
+        )
+    return offset
+
+
+def _sync_audio_output_to_chain(namespace, source, preview_info=None):
     """Mux only this segment's audio from the potentially cumulative output.
 
     Exact-final sidecars already contain the correct, overlap-trimmed video.
@@ -744,15 +790,7 @@ def _sync_audio_output_to_chain(namespace, source):
     duration = _ffprobe_duration(target)
     source_duration = _ffprobe_duration(source)
     tolerance = 0.15  # Encoder/container rounding, not a whole overlap or clip.
-    if abs(source_duration - duration) <= tolerance:
-        offset = 0.0  # A renderer may already return only the new segment.
-    else:
-        match = re.fullmatch(r"ref2va_(\d+)\.[^.]+", target.name)
-        if match is None:
-            raise RuntimeError("Cannot identify the rendered clip segment")
-        offset = _segment_preview_offset(target.parent.parent, int(match.group(1)))
-        if offset <= 0 or abs(source_duration - (offset + duration)) > tolerance:
-            raise RuntimeError("Rendered audio timeline does not match the exact clip segment")
+    offset = _decoded_clip_audio_offset(target, source_duration, duration, preview_info)
     temporary = target.with_name(f".{target.stem}.audio-sync-{os.getpid()}.tmp.mp4")
     try:
         command = [
@@ -970,7 +1008,10 @@ def _render_with_progress(job, job_input, reporter, rate_value, started_at, queu
     output_video = _output_artifact_path(videos[-1]) if videos else None
     if videos:
         try:
-            synced = _sync_audio_output_to_chain(job_input.get("cache_namespace"), output_video)
+            synced = _sync_audio_output_to_chain(
+                job_input.get("cache_namespace"), output_video,
+                reporter.video_timelines.get(output_video.name) if output_video else None,
+            )
             output_video = synced or _latest_chain_segment(job_input.get("cache_namespace"))[0]
             if output_video is None:
                 return {"error": "No isolated video segment was found for this clip"}

@@ -5,6 +5,7 @@ Set FFMPEG_BINARY to run the real two-tone A/V regression as well.
 """
 import ast
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -18,14 +19,41 @@ import unittest
 def handler_functions():
     path = Path(__file__).resolve().parents[1] / "runpod_handler.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    names = {"_segment_preview_offset", "_sync_audio_output_to_chain"}
+    names = {"_segment_preview_offset", "_decoded_clip_audio_offset", "_sync_audio_output_to_chain"}
     module = ast.Module(body=[node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names], type_ignores=[])
-    scope = dict(Path=Path, json=json, re=re, os=os, subprocess=subprocess)
+    scope = dict(Path=Path, json=json, re=re, os=os, math=math, subprocess=subprocess)
     exec(compile(module, str(path), "exec"), scope)
     return scope
 
 
 class ClipAudioTests(unittest.TestCase):
+    def test_decoder_timeline_handles_real_h3_frame_counts(self):
+        info = {"clip": 2, "color_timeline": [
+            {"index": 0, "start": 0, "end": 10.125},
+            {"index": 1, "start": 10.125, "end": 464 / 24},
+        ]}
+        offset = handler_functions()["_decoded_clip_audio_offset"](
+            Path("ref2va_0001.mp4"), 19.334, 221 / 24, info)
+        self.assertEqual(offset, 10.125)
+
+    def test_restored_first_clip_cannot_be_delivered_as_second_clip(self):
+        info = {"clip": 2, "color_timeline": [{"index": 1, "start": 10.125, "end": 464 / 24}]}
+        with self.assertRaisesRegex(RuntimeError, "Restored cache contains clip 1"):
+            handler_functions()["_decoded_clip_audio_offset"](
+                Path("ref2va_0000.mp4"), 19.334, 10.125, info)
+
+    def test_extender_rechecks_external_disk_state_for_identical_inputs(self):
+        path = Path(__file__).resolve().parents[1] / "extender.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        node = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "MiniMaxH3Extender")
+        method = next(method for method in node.body if isinstance(method, ast.FunctionDef) and method.name == "IS_CHANGED")
+        cls = ast.ClassDef(name="Extender", bases=[], keywords=[], body=[method], decorator_list=[])
+        scope = {}
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[cls], type_ignores=[])), str(path), "exec"), scope)
+        first = scope["Extender"].IS_CHANGED(clips_json="same inputs")
+        second = scope["Extender"].IS_CHANGED(clips_json="same inputs")
+        self.assertNotEqual(first, second)
+
     def test_offset_accounts_for_prior_overlap_trims(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -84,6 +112,10 @@ class ClipAudioTests(unittest.TestCase):
             scope.update(_has_audio_stream=has_audio, _ffprobe_duration=duration,
                          _latest_chain_segment=lambda _: (target, None), _find_ffmpeg=lambda: ffmpeg)
             self.assertEqual(scope["_sync_audio_output_to_chain"]("test", source), target)
+            self.assertAlmostEqual(duration(target), 1, delta=0.1)
+            # The current decoder supplies boundaries for this exact output.
+            info = {"clip": 2, "color_timeline": [{"index": 1, "start": 1.0, "end": 2.0}]}
+            scope["_sync_audio_output_to_chain"]("test", source, info)
             self.assertAlmostEqual(duration(target), 1, delta=0.1)
             self.assertEqual(run("-i", str(target), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"), expected_pixels)
             audio = run("-i", str(target), "-ss", "0.2", "-t", "0.5", "-vn", "-ac", "1", "-ar", "8000", "-f", "f32le", "pipe:1")
