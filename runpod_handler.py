@@ -115,15 +115,15 @@ class _ProgressReporter:
 
     def _send_loop(self):
         while True:
-            self.wake.wait()
+            self.wake.wait(timeout=30)
             self.wake.clear()
             state = self.state
-            if state and state != self.sent:
+            if state:
                 try:
                     requests.post(self.url, json={
                         "jobId": self.delivery.get("job_id"), "path": self.delivery.get("storage_path"),
                         "expiresAt": self.delivery.get("expires_at"), "token": self.delivery.get("token"),
-                        **state,
+                        **state, "heartbeat": state == self.sent,
                     }, timeout=10).raise_for_status()
                     self.sent = state
                 except requests.RequestException as error:

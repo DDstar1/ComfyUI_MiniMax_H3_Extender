@@ -149,7 +149,8 @@ def _direct_health():
         ready = False
     with _ACTIVE_LOCK:
         busy = bool(_ACTIVE_JOBS)
-    return {"ready": ready, "busy": busy, "profile": _RENDER_PROFILE, "protocol": 1}
+        active_job_ids = sorted(_ACTIVE_JOBS)
+    return {"ready": ready, "busy": busy, "active_job_ids": active_job_ids, "profile": _RENDER_PROFILE, "protocol": 1}
 
 
 def _direct_submit(payload):
@@ -177,7 +178,7 @@ def _direct_submit(payload):
         # the primary worker port; our templates keep this loopback hop HTTP.
         port = int(os.environ.get("WORKER_PORT", "3000"))
         response = requests.post(f"http://127.0.0.1:{port}/session/create", json={
-            "auth_data": grant, "payload": {"lifetime": 1800}}, timeout=10)
+            "auth_data": grant, "payload": {"lifetime": 7200}}, timeout=10)
         response.raise_for_status()
         created = response.json()
         created = created.get("response", created)

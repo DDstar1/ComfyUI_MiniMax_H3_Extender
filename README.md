@@ -1,5 +1,10 @@
 # ComfyUI MiniMax H3 Extender
 
+## Render liveness repair — 2026-10-10
+
+Progress reporting now posts independent 30-second heartbeats during cache sync, model loading, sampling, decoding and delivery. Failed reports are retried on subsequent sends without blocking ComfyUI; unchanged state is a heartbeat rather than a new progress timestamp. Direct capacity sessions last two hours and close in the existing finally block. Authenticated health includes active job IDs. The accompanying application migration and failure-policy changes distinguish actual progress, heartbeat liveness, stage stalls and confirmed stops while preserving exactly-once settlement. No paid long-render test has been performed. The owner confirms the frontend iPhone scroll fix works; it is unrelated to this worker change.
+
+
 ## Follow-up evidence — live step updates before failure (2026-10-10)
 
 **Documentation only; runtime failure remains unresolved.** Read this together
