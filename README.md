@@ -28,7 +28,7 @@ GitHub build `37958748055` published worker commit `492e16e`; final workflow cac
 
 Standard retains its 24 GB GPU / 48 GB CPU RAM filters and 100 GB disk.
 Enhanced retains its 80 GB GPU / 96 GB CPU RAM filters and 150 GB disk.
-The current price limits are $0.50/hour and $1.50/hour respectively.
+The current price limits are $0.30/hour and $0.80/hour respectively.
 `VAST_BF16_ACCEPTS_STANDARD=true` is enabled locally and in Vercel.
 Both pools now have the private HTTPS credentials and exposed TCP 18290. Replacement Standard workers download their weights during cold startup. No paid video render was submitted for authentication verification.
 Video pools sleep after 15 idle minutes and are removed after 30 total idle
@@ -841,12 +841,12 @@ Validation: four authentication/recruitment/fidelity-routing tests, two startup-
 
 ### Current GPU rental price caps — 2026-10-09
 
-Live Vast worker-group filters were updated and read back: Standard group 48221 permits dph_total <= $0.50/hour; Enhanced group 50229 permits dph_total <= $1.50/hour. Cheapest-verified-first selection is preserved. These are maximum offer prices, not target spending; separately billed storage/network charges can add cost. Other hardware, reliability and host-exclusion limits remain unchanged. Obsolete recruitment machine equalities were cleared so the next selection can consider offers within the higher caps. No environment change or worker-image rebuild is required.
+Live Vast worker-group filters were updated and read back: Standard group 48221 permits dph_total <= $0.30/hour; Enhanced group 50229 permits dph_total <= $0.80/hour. Cheapest-verified-first selection is preserved. These are maximum offer prices, not target spending; separately billed storage/network charges can add cost. Other hardware, reliability and host-exclusion limits remain unchanged. Obsolete recruitment machine equalities were cleared so the next selection can consider offers within the higher caps. No environment change or worker-image rebuild is required.
 
 
 ## Latest platform changes — 2026-10-09
 
-- Standard rental cap is $0.50/hour and Enhanced is $1.50/hour. New recruitment selects the cheapest matching verified host first and falls back to the cheapest matching unverified host when no verified offer exists. Existing starting/running workers remain in place; other resource, reliability and failed-host filters remain enforced.
+- Standard rental cap is $0.30/hour and Enhanced is $0.80/hour. New recruitment selects the cheapest matching verified host first and falls back to the cheapest matching unverified host when no verified offer exists. Existing starting/running workers remain in place; other resource, reliability and failed-host filters remain enforced.
 - Stalled Docker-image replacement occurs after ten minutes without new completed layers. Worker idle sleep remains fifteen minutes and idle removal thirty minutes. Queue timeout remains thirty minutes with released reservations.
 - Render polls and cleanup detect confirmed stopped/missing assigned workers, fail interrupted jobs through atomic settlement, and return the persisted result. Provider lookup failures alone do not fail fresh jobs; completion races preserve the successful saved result. The underlying Vast mid-render stop cause remains unresolved.
 - The director now supplies exact words, speakers, language and speaking order for all speech. MiniMax must not invent wording for summarized dialogue beats. This applies to planning, brief edits, change requests and recompilation across projects. Existing prompts and media need recompilation/regeneration to adopt the rule.
@@ -857,3 +857,13 @@ Live Vast worker-group filters were updated and read back: Standard group 48221 
 - Compilation help is a question-mark tooltip to the right of the action, replacing the permanent explanation. Compilation actions remain right-aligned against the left status. Question-mark and duration/quality/motion-fidelity lock tooltips close on outside click/tap or Escape. Motion fidelity has the same lock help as Quality. The regeneration spinner follows its status text on one line. Tooltip copy begins with “Update”.
 
 Verification: focused continuity, ready-prefix, worker-state/auth/recruitment tests passed; TypeScript passed after the latest code changes. Two older broad director tests still fail on unchanged locked-edit expectations, and the studio component has pre-existing lint findings. Browser end-to-end verification of the latest interface changes is outstanding. Live worker 55063044 completed one video; its subsequent render was interrupted and verified failed with released credit. No new worker image is required for these frontend changes; the shared video pools retain pinned vast-492e16e.
+
+### Rental filters and account menu — 10 October 2026
+
+Standard worker group 48221 is capped at $0.30/hour; Enhanced group 50229
+is capped at $0.80/hour. Cheapest verified offers retain priority; unverified
+offers remain the fallback. Resource and failed-host constraints are retained.
+The market snapshot found 2 verified and 2 unverified Standard offers, and no
+Enhanced offers. Availability changes; counts are not reserved workers.
+These are offer price caps; separately billed storage/network can add costs.
+No worker-image rebuild is required for these filter changes.
