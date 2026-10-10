@@ -1,5 +1,71 @@
 # ComfyUI MiniMax H3 Extender
 
+## Follow-up evidence — live step updates before failure (2026-10-10)
+
+**Documentation only; runtime failure remains unresolved.** Read this together
+with the premature-render-failure handoff below. The owner reported another
+failure about 17 minutes into generation while the frontend step counter was
+advancing. A read-only production Supabase query confirmed:
+
+| Job | Assigned (UTC) | Last recorded progress (UTC) | Marked failed (UTC) |
+| --- | --- | --- | --- |
+| `948a3a99-1c3e-43e9-9100-df9ce8a08a8c` | 15:04:56.910 | Step 19/22, 15:20:14.394 | 15:21:35.264579 |
+| `cf2faf13-db4f-440f-9fb2-b316268dc8db` | 14:46:42.777 | Step 19/22, 15:02:05.916 | 15:03:20.183023 |
+
+Both used instance **55229174**, machine **147773**, RTX PRO 4000,
+Thailand, with provider IDs `vast:direct:<job UUID>`. Latest job submission
+was 15:03:58.276083 UTC. Nigeria time is UTC+1: latest progress at 16:20:14
+and failure at 16:21:35. The last recorded progress preceded failure by only
+about **81 seconds** (the preceding attempt by about **74 seconds**).
+
+These records contradict the earlier hypothesis of ten minutes without
+progress for these attempts. The progress callback in
+`src/app/api/renders/progress/route.ts` writes both `progress.updated_at`
+and job `updated_at` when a new sampling step is accepted. Both jobs retained
+the generic GPU-stopped message. The job's final `updated_at` is the failure
+timestamp, not its last pre-failure liveness timestamp.
+
+### Priority investigation for the next agent
+
+- Trace `failStalledVastJob` and `assignedVastWorkerStopped`. The latter
+  returns true if the assigned instance is absent from a successful account
+  instance-list response, or its actual status is exited/stopped/destroyed.
+  That branch can fail a job immediately, regardless of fresh progress.
+- Correlate Vast instance/container logs and provider state around
+  15:21:35 UTC and 15:03:20 UTC. Determine whether the instance really stopped,
+  temporarily disappeared from the listing, or was incorrectly classified.
+  Provider state at those failure times was not captured in this investigation;
+  an actual GPU crash or a false stop detection is not yet proven.
+- Check local capacity-session creation/closure and load tracking in the
+  authenticated direct worker path against Vast's idle sleep policy. A worker
+  remaining usable on retry does not establish its state at failure. Do not
+  diagnose session expiry solely from total elapsed time.
+- Check stale status/cleanup snapshots and concurrent progress callbacks:
+  the failure RPC locks the row but does not revalidate the caller's stale
+  timeout/state evidence against fresh progress before failing an active job.
+  Add an atomic conditional transition and persist the specific failure
+  reason, observed provider state, observation time and last progress time.
+- Confirm a stopped/missing observation using an individual-instance lookup
+  and authenticated job-aware health where available; transient or ambiguous
+  state should remain unknown. Define bounded confirmation/grace and genuine
+  crash handling rather than masking failures by increasing all timeouts.
+- Retain the heartbeat, stage-aware deadlines, delivery-expiry alignment,
+  exactly-once settlement and late-callback suggestions below. Heartbeats
+  alone will not fix an immediate erroneous stopped-worker classification.
+- Regressions must cover fresh progress plus transient missing-instance
+  responses, genuine stopped workers, progress racing stale failure checks,
+  and capacity sessions keeping a long direct render active.
+
+### Secure access for investigation
+
+The existing application uses server-side `VASTAI_API_KEY`. The next agent
+should use an authorized secure environment/secrets mechanism to query Vast.
+Do not paste keys into chat, commit them to READMEs, print their values in
+logs, or put them in browser-exposed variables. This session could read
+Supabase job records and repository code, but could not access the Vercel
+environment value or Vast worker logs. No credential value is recorded here.
+
+
 ## Agent handoff — premature Vast render failures (2026-10-10)
 
 **Open issue; documentation only, not fixed.** The owner reports frequent
