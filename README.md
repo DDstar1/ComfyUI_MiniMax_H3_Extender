@@ -1,4 +1,75 @@
 # ComfyUI MiniMax H3 Extender
+
+## Agent handoff — premature Vast render failures (2026-10-10)
+
+**Open issue; documentation only, not fixed.** The owner reports frequent
+full-story/clip failures saying: "The GPU stopped responding before your video
+finished. Your reserved credit has been released. Please try again." The worker
+was usable when generation was started again. This suggests a possible false
+timeout, but does not prove that the previous render was still progressing or
+that the 30-minute session limit caused the failure.
+
+Verified code at this handoff:
+- Application `src/lib/server/vast-dispatch.ts`: `VAST_STALL_MS` is 10 minutes.
+  `failStalledVastJob` can fail an assigned queued/running job when its
+  `updated_at` is stale even if Vast does not confirm the worker stopped.
+  It also fails a job if the assigned instance is confirmed stopped.
+- Worker `vast_handler.py`: the direct request path creates a Vast session
+  with `payload: {"lifetime": 1800}` (30 minutes). Check the provider's actual
+  expiry behavior before treating this as a proven render termination limit.
+- Worker `runpod_handler.py`: progress reporting follows ComfyUI stage/step
+  events. Long loading, decoding or upload stages and failed callback delivery
+  can leave the application without fresh progress.
+- ClipWeave now samples at 22 steps with `res_multistep` / `beta`, directly
+  from the pruned INT8 (Standard) or BF16 (Enhanced) model, without a Turbo
+  LoRA in the application-generated workflow. Longer sampling increases the
+  need to check duration limits; total runtime alone should not trip the
+  silence detector when progress continues arriving.
+
+### Investigation before changing failure policy
+
+Inspect recent failed jobs: assignment time, last progress stage/step and time,
+failure time, worker instance ID/state, worker traceback, callback errors and
+Vast session lifetime. Correlate these to distinguish a confirmed stopped
+worker, 10-minute callback silence, session expiry, OOM or another real error.
+Do not assume a healthy worker after retry establishes what happened before.
+Check deployed worker digest and application deployment against repository code.
+
+### Suggested implementation
+
+1. Send authenticated job heartbeats every 30–60 seconds during loading,
+   sampling, decoding, cache sync and upload, independently of step events.
+   Add callback retry/backoff and log delivery failures without blocking rendering.
+2. Store heartbeat time separately from actual stage/step progress. A heartbeat
+   proves process liveness, not forward progress; retain a stage-aware stall
+   policy and an absolute maximum render deadline to catch hung renders.
+3. Before failing a silent job, check the assigned worker and, where available,
+   the specific job/session state. A running instance alone is insufficient.
+   Treat provider lookup failures as unknown, not confirmation of a crash.
+4. Set session lifetime comfortably above measured worst-case render duration
+   plus loading/decoding/upload time; consider renewal if the provider supports
+   it. Align callback token/upload URL expiry and other delivery/request limits.
+   Avoid an unlimited timeout or simply raising every threshold.
+5. Persist distinct failure reasons and the last real stage: worker stopped,
+   heartbeat lost, stage stalled, session expired or explicit worker error.
+   Replace the generic GPU-stopped message when there is no evidence of a stop.
+6. Preserve one active render per project and exactly-once settlement. Handle
+   late success callbacks after a timeout/refund safely; never charge twice,
+   publish over newer clips, or automatically resubmit work still running.
+   Verify cleanup cannot park/destroy an instance still doing live work.
+
+### Acceptance checks
+
+- A render lasting beyond 30 minutes can complete with valid session/delivery
+  credentials; quiet loading/decoding/upload stages do not falsely fail.
+- A crashed/stopped worker still fails and releases reserved credit.
+- A live but frozen process eventually fails under the stage/deadline policy.
+- Callback outages/recovery, late completion and overlapping cleanup/status
+  polls do not double-refund, double-charge or submit duplicate GPU work.
+- Test heartbeat and timeout policy locally/mocked first. Coordinate worker
+  image publication/template rollout with the application change; pushing the
+  frontend alone does not update already-deployed worker containers.
+
 ## Motion-fidelity worker profiles — 2026-10-08
 
 One Docker image now supports two Vast worker profiles through
