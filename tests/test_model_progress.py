@@ -42,6 +42,16 @@ class ModelProgressTests(unittest.TestCase):
         self.assertEqual(events[-1]["percent"], 100)
         self.assertIsNone(module.PROGRESS_CONTEXT.bar)
 
+    def test_installed_hub_progress_api_is_supported(self):
+        try:
+            import huggingface_hub
+        except ImportError:
+            self.skipTest("Hub is checked in the worker image build")
+        import inspect
+        from huggingface_hub import file_download
+        supported = "tqdm_class" in inspect.signature(huggingface_hub.hf_hub_download).parameters
+        self.assertTrue(supported or callable(getattr(file_download, "_get_progress_bar_context", None)))
+
     def test_modern_hub_reports_actual_bytes(self):
         self.run_download()
 
