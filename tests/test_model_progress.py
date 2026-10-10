@@ -18,11 +18,15 @@ class FakeBar:
 
 
 class ModelProgressTests(unittest.TestCase):
-    def test_download_reports_actual_bytes_and_completion(self):
-        def fake_download(**kwargs):
-            bar = kwargs["tqdm_class"](total=100, initial=20)
+    def run_download(self, legacy=False):
+        context = types.SimpleNamespace(_get_progress_bar_context=lambda **kwargs: FakeBar(**kwargs))
+        def modern_download(*, tqdm_class=None, **kwargs):
+            bar = tqdm_class(total=100, initial=20)
             bar.update(10)
-        modules = {"huggingface_hub": types.SimpleNamespace(hf_hub_download=fake_download),
+        def legacy_download(*, repo_id, filename, local_dir, token):
+            bar = context._get_progress_bar_context(total=100, initial=20, log_level=20, name="download")
+            bar.update(10)
+        modules = {"huggingface_hub": types.SimpleNamespace(hf_hub_download=legacy_download if legacy else modern_download, file_download=context),
                    "tqdm.auto": types.SimpleNamespace(tqdm=FakeBar)}
         spec = importlib.util.spec_from_file_location("provision", Path(__file__).parents[1] / "vast_provision_models.py")
         module = importlib.util.module_from_spec(spec)
@@ -36,6 +40,13 @@ class ModelProgressTests(unittest.TestCase):
         self.assertNotIn("percent", events[0])
         self.assertEqual(events[1]["percent"], 30)
         self.assertEqual(events[-1]["percent"], 100)
+        self.assertIsNone(module.PROGRESS_CONTEXT.bar)
+
+    def test_modern_hub_reports_actual_bytes(self):
+        self.run_download()
+
+    def test_legacy_hub_reports_actual_bytes_without_unsupported_keyword(self):
+        self.run_download(legacy=True)
 
 
 if __name__ == "__main__":

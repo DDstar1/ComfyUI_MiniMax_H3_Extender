@@ -13,10 +13,32 @@ import os
 import sys
 import time
 import json
+import inspect
+import threading
 from tqdm.auto import tqdm
 
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, file_download
 
+
+PROGRESS_CONTEXT = threading.local()
+# Older ComfyUI dependencies use Hub 0.x: its public download call has no
+# tqdm_class argument, but both HTTP and Xet use this progress context.
+_ORIGINAL_PROGRESS_CONTEXT = getattr(file_download, "_get_progress_bar_context", None)
+
+
+def progress_context(**kwargs):
+    cls = getattr(PROGRESS_CONTEXT, "bar", None)
+    if cls is not None and kwargs.get("_tqdm_bar") is None:
+        options = {key: value for key, value in kwargs.items()
+                   if key not in ("log_level", "name", "_tqdm_bar", "tqdm_class")}
+        return cls(**options)
+    return _ORIGINAL_PROGRESS_CONTEXT(**kwargs)
+
+
+if "tqdm_class" not in inspect.signature(hf_hub_download).parameters:
+    if _ORIGINAL_PROGRESS_CONTEXT is None:
+        raise RuntimeError("Installed Hugging Face Hub lacks a supported progress context")
+    file_download._get_progress_bar_context = progress_context
 
 ROOT = Path("/runpod-volume/runpod-slim/ComfyUI/models")
 REPO = "Comfy-Org/MiniMax-H3"
@@ -65,8 +87,12 @@ def download(filename):
                 self.last_report = now
             return result
 
-    hf_hub_download(repo_id=REPO, filename=filename, local_dir=ROOT, token=TOKEN,
-                    tqdm_class=ModelProgress)
+    PROGRESS_CONTEXT.bar = ModelProgress
+    try:
+        options = {"tqdm_class": ModelProgress} if "tqdm_class" in inspect.signature(hf_hub_download).parameters else {}
+        hf_hub_download(repo_id=REPO, filename=filename, local_dir=ROOT, token=TOKEN, **options)
+    finally:
+        PROGRESS_CONTEXT.bar = None
     report("downloading", model_index=index, model_total=len(FILES), percent=100)
     print(f"[ClipWeave] Downloaded model in {time.monotonic() - started:.0f}s: {filename}", flush=True)
 
