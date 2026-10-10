@@ -875,3 +875,6 @@ Queued video jobs distinguish looking for GPU capacity, downloading the worker i
 Image percentages are explicitly per Docker layer when provider logs contain byte counts; an overall image percentage is unavailable and is never guessed. Model transfers report the model index/count and byte percentage through Hugging Face progress callbacks, with a spinner when the transfer backend supplies no byte progress. Standard provisions five models and Enhanced six, including its Standard fallback model. Cached models skip downloads. ComfyUI readiness clears startup status. Existing timeout/refund and host replacement policies remain intact.
 
 No database migration is needed. The frontend and a new Vast worker image must both be deployed; existing containers retain their old reporting until replaced normally.
+
+Startup reporting rollout — 2026-10-10: the Vast worker image vast-2656188 supports both legacy and modern Hugging Face model-progress APIs. The cloud image build validates its installed library API. Both video worker groups use its pinned digest; Standard remains capped at $0.30/hour and Enhanced at $0.80/hour. The frontend shows GPU search, image transfer, model download and ComfyUI startup before rendering progress. Image percentages are per layer when available. No paid generation was submitted for validation.
+
