@@ -254,6 +254,7 @@ def wait_for_comfyui():
         try:
             with urlopen("http://127.0.0.1:8188/system_stats", timeout=2) as response:
                 if response.status == 200:
+                    print('[ClipWeave startup] {"stage":"ready"}', flush=True)
                     LOG_FILE.write_text("CLIPWEAVE_READY\n", encoding="utf-8")
                     return
         except (OSError, URLError):

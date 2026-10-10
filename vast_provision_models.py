@@ -12,6 +12,8 @@ from pathlib import Path
 import os
 import sys
 import time
+import json
+from tqdm.auto import tqdm
 
 from huggingface_hub import hf_hub_download
 
@@ -38,10 +40,34 @@ FILES = ((*PROFILE_MODELS.values(), *COMMON_FILES) if RENDER_PROFILE == "enhance
 TOKEN = os.getenv("HF_TOKEN") or None
 
 
+def report(stage, **fields):
+    print("[ClipWeave startup] " + json.dumps({"stage": stage, **fields}), flush=True)
+
+
 def download(filename):
     started = time.monotonic()
     print(f"[ClipWeave] Downloading model: {filename}", flush=True)
-    hf_hub_download(repo_id=REPO, filename=filename, local_dir=ROOT, token=TOKEN)
+    index = FILES.index(filename) + 1
+    report("downloading", model_index=index, model_total=len(FILES))
+
+    class ModelProgress(tqdm):
+        def __init__(self, *args, **kwargs):
+            kwargs["disable"] = False
+            self.last_report = 0
+            super().__init__(*args, **kwargs)
+
+        def update(self, amount=1):
+            result = super().update(amount)
+            now = time.monotonic()
+            if self.total and (now - self.last_report >= 10 or self.n >= self.total):
+                report("downloading", model_index=index, model_total=len(FILES),
+                       percent=round(min(100, 100 * self.n / self.total), 1))
+                self.last_report = now
+            return result
+
+    hf_hub_download(repo_id=REPO, filename=filename, local_dir=ROOT, token=TOKEN,
+                    tqdm_class=ModelProgress)
+    report("downloading", model_index=index, model_total=len(FILES), percent=100)
     print(f"[ClipWeave] Downloaded model in {time.monotonic() - started:.0f}s: {filename}", flush=True)
 
 
@@ -56,6 +82,7 @@ def main():
             target.parent.mkdir(parents=True, exist_ok=True)
             missing.append(filename)
     if not missing:
+        report("booting")
         return
 
     started = time.monotonic()
@@ -75,6 +102,7 @@ def main():
     # parallel attempt stopped.
     for filename in failed:
         download(filename)
+    report("booting")
     print(f"[ClipWeave] Models ready in {time.monotonic() - started:.0f}s "
           f"({len(failed)} retried one by one)", flush=True)
 

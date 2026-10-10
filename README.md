@@ -867,3 +867,11 @@ The market snapshot found 2 verified and 2 unverified Standard offers, and no
 Enhanced offers. Availability changes; counts are not reserved workers.
 These are offer price caps; separately billed storage/network can add costs.
 No worker-image rebuild is required for these filter changes.
+
+## Startup progress — 2026-10-10
+
+Queued video jobs distinguish looking for GPU capacity, downloading the worker image, downloading models, and starting ComfyUI. The pool watchdog caches sanitized startup observations once per minute; queued jobs reuse these observations until a worker accepts the job. Rendering callbacks then take precedence. Startup is shared pool preparation, not a promise that a specific worker has been assigned.
+
+Image percentages are explicitly per Docker layer when provider logs contain byte counts; an overall image percentage is unavailable and is never guessed. Model transfers report the model index/count and byte percentage through Hugging Face progress callbacks, with a spinner when the transfer backend supplies no byte progress. Standard provisions five models and Enhanced six, including its Standard fallback model. Cached models skip downloads. ComfyUI readiness clears startup status. Existing timeout/refund and host replacement policies remain intact.
+
+No database migration is needed. The frontend and a new Vast worker image must both be deployed; existing containers retain their old reporting until replaced normally.
